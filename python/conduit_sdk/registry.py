@@ -377,7 +377,13 @@ class Registry:
                 f"Agent {agent_id!r} binary for {plat!r} missing 'cmd'"
             )
 
-        cmd = [cmd_str]
+        # The registry cmd is often a relative path like "./opencode" from the
+        # archive.  If the binary basename is already on PATH, prefer that.
+        basename = cmd_str.lstrip("./")
+        on_path = find_runtime(basename)
+        resolved_cmd = on_path if on_path else cmd_str
+
+        cmd = [resolved_cmd]
         args = plat_config.get("args", [])
         if args:
             cmd.extend(args)

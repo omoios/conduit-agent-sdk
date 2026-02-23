@@ -40,7 +40,7 @@ def _mock_urlopen():
 
 class TestQuery:
     @pytest.mark.asyncio
-    async def test_query_resolves_and_creates_client(self):
+    async def test_query_resolves_and_creates_client(self, tmp_path):
         """Verify that query() does registry fetch + client creation."""
         mock_message = MagicMock()
         mock_message.text.return_value = "Hello from agent!"
@@ -48,6 +48,7 @@ class TestQuery:
         with (
             patch("conduit_sdk.registry.urllib.request.urlopen", return_value=_mock_urlopen()),
             patch("conduit_sdk.registry.find_runtime", return_value="/usr/local/bin/npx"),
+            patch("conduit_sdk.registry._default_cache_dir", return_value=tmp_path),
             patch("conduit_sdk.client.Client.__init__", return_value=None) as mock_init,
             patch("conduit_sdk.client.Client.__aenter__") as mock_enter,
             patch("conduit_sdk.client.Client.__aexit__") as mock_exit,
@@ -106,11 +107,12 @@ class TestQuery:
             assert "custom.example.com" in call_args[0][0].full_url
 
     @pytest.mark.asyncio
-    async def test_query_passes_timeout(self):
+    async def test_query_passes_timeout(self, tmp_path):
         """Verify timeout is forwarded to Client."""
         with (
             patch("conduit_sdk.registry.urllib.request.urlopen", return_value=_mock_urlopen()),
             patch("conduit_sdk.registry.find_runtime", return_value="/usr/local/bin/npx"),
+            patch("conduit_sdk.registry._default_cache_dir", return_value=tmp_path),
             patch("conduit_sdk.client.Client.__init__", return_value=None) as mock_init,
             patch("conduit_sdk.client.Client.__aenter__") as mock_enter,
             patch("conduit_sdk.client.Client.__aexit__", return_value=False),
