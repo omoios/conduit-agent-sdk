@@ -16,11 +16,10 @@ Example::
 from __future__ import annotations
 
 import functools
-import json
 from collections.abc import Callable
 from typing import Any
 
-from conduit_sdk._conduit_sdk import HookType, RustHookDispatcher
+from conduit_sdk._conduit_sdk import HookType
 from conduit_sdk.types import HookContext
 
 __all__ = ["HookType", "HookRunner", "hook"]
@@ -29,12 +28,11 @@ __all__ = ["HookType", "HookRunner", "hook"]
 class HookRunner:
     """Manages lifecycle hooks for a client connection.
 
-    Provides decorator-based registration and dispatches hooks through
-    the Rust layer for performance.
+    Provides decorator-based registration and dispatches hooks
+    directly in Python for simplicity and correct callback invocation.
     """
 
     def __init__(self) -> None:
-        self._dispatcher = RustHookDispatcher()
         self._hooks: list[tuple[HookType, Callable, int]] = []
 
     def on(
@@ -68,20 +66,21 @@ class HookRunner:
 
         return decorator
 
-    async def register_all(self) -> None:
-        """Register all collected hooks with the Rust dispatcher."""
-        for hook_type, callback, priority in self._hooks:
-            await self._dispatcher.register(hook_type, callback, priority)
-
     async def dispatch(self, hook_type: HookType, context: HookContext) -> HookContext:
         """Dispatch hooks of the given type with the provided context.
 
+        Calls matching hooks in priority order (lower = earlier).
         Returns the (possibly modified) context after all hooks run.
         """
-        context_json = json.dumps({"hook_type": context.hook_type, "data": context.data})
-        result_json = await self._dispatcher.dispatch(hook_type, context_json)
-        result = json.loads(result_json)
-        return HookContext(hook_type=result.get("hook_type", ""), data=result.get("data", {}))
+        matching = sorted(
+            [(cb, p) for ht, cb, p in self._hooks if ht == hook_type],
+            key=lambda x: x[1],
+        )
+        for callback, _ in matching:
+            result = await callback(context)
+            if result is not None:
+                context = result
+        return context
 
     def clear(self, hook_type: HookType | None = None) -> None:
         """Remove hooks, optionally filtered by type."""

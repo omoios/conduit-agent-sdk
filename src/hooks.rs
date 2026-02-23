@@ -4,9 +4,7 @@
 //! Hooks are registered on the client and dispatched at specific points
 //! in the request/response lifecycle.
 
-use crate::error::ConduitError;
 use pyo3::prelude::*;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -36,6 +34,7 @@ pub enum HookType {
 struct RegisteredHook {
     hook_type: HookType,
     /// Python callable: `async def hook(context: dict) -> dict | None`
+    #[allow(dead_code)]
     callback: PyObject,
     /// Priority for ordering (lower = earlier).
     priority: i32,

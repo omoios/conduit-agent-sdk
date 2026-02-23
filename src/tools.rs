@@ -4,7 +4,7 @@
 //! Tools are exposed via the MCP-over-ACP bridge (`_mcp/*` protocol),
 //! letting the agent invoke Python callbacks during its execution.
 
-use crate::error::{ConduitError, Result};
+use crate::error::ConduitError;
 use crate::types::ToolDefinition;
 use pyo3::prelude::*;
 use std::collections::HashMap;
@@ -13,6 +13,7 @@ use tokio::sync::Mutex;
 
 /// A registered tool with its Python callback.
 struct RegisteredTool {
+    #[allow(dead_code)]
     definition: ToolDefinition,
     /// Python callable: `async def handler(input: dict) -> str`
     callback: PyObject,
@@ -79,8 +80,8 @@ impl RustToolRegistry {
 
     /// Invoke a tool by name with the given JSON input string.
     ///
-    /// This is called internally when the agent sends a tool invocation
-    /// via the MCP bridge. The result is sent back to the agent.
+    /// Parses `input_json` as a dict and calls the registered async Python
+    /// callback with keyword arguments. Returns the stringified result.
     fn invoke<'py>(
         &self,
         py: Python<'py>,
@@ -90,18 +91,34 @@ impl RustToolRegistry {
         let tools = self.tools.clone();
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let map = tools.lock().await;
-            let tool = map.get(&name).ok_or_else(|| {
-                ConduitError::Tool(format!("tool not found: {name}"))
+            // Get the callback and start the coroutine under the GIL,
+            // then await outside the GIL.
+            let result_future = Python::with_gil(|py| -> PyResult<_> {
+                let map = tools.blocking_lock();
+                let tool = map.get(&name).ok_or_else(|| {
+                    ConduitError::Tool(format!("tool not found: {name}"))
+                })?;
+
+                // Parse JSON input to a Python dict for **kwargs.
+                let json_mod = py.import("json")?;
+                let parsed = json_mod.call_method1("loads", (&input_json,))?;
+                let kwargs = parsed.downcast::<pyo3::types::PyDict>()?;
+
+                // Call the async callback → get a coroutine → convert to Rust future.
+                let coro = tool.callback.bind(py).call((), Some(kwargs))?;
+                pyo3_async_runtimes::tokio::into_future(coro)
             })?;
 
-            // TODO: Call the Python callback with the parsed input.
-            // This requires acquiring the GIL and calling the async Python
-            // function, then serializing the result back to JSON.
-            let _ = &tool.callback;
-            let _ = input_json;
-            let result = String::from("{}");
-            Ok(result)
+            let result_obj = result_future.await?;
+
+            // Convert the Python result to a JSON string.
+            Python::with_gil(|py| -> PyResult<String> {
+                result_obj.extract::<String>(py).or_else(|_| {
+                    let json_mod = py.import("json")?;
+                    let dumped = json_mod.call_method1("dumps", (result_obj.bind(py),))?;
+                    dumped.extract::<String>()
+                })
+            })
         })
     }
 }

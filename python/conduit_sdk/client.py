@@ -19,12 +19,16 @@ With options::
 
 from __future__ import annotations
 
-import asyncio
-import json
 from collections.abc import AsyncIterator
 from typing import Any
 
-from conduit_sdk._conduit_sdk import ClientConfig, RustClient, RustControlProtocol
+from conduit_sdk._conduit_sdk import (
+    ClientConfig,
+    RustClient,
+    RustControlProtocol,
+    SessionUpdate,
+    UpdateKind,
+)
 from conduit_sdk.exceptions import ConnectionError
 from conduit_sdk.hooks import HookRunner
 from conduit_sdk.options import AgentOptions
@@ -143,6 +147,10 @@ class Client:
 
         Returns the agent's advertised capabilities.
         """
+        # Wire the permission callback into Rust before connecting.
+        if self._options is not None and self._options.can_use_tool is not None:
+            self._rust_client.set_permission_callback(self._options.can_use_tool)
+
         self._capabilities = await self._rust_client.connect()
         self._connected = True
 
@@ -187,23 +195,61 @@ class Client:
 
     # -- Prompting -----------------------------------------------------------
 
-    async def prompt(self, text: str) -> AsyncIterator[Message]:
+    async def prompt(
+        self, text: str, *, session_id: str | None = None
+    ) -> AsyncIterator[Message]:
         """Send a prompt to the agent and stream back response messages.
 
-        Yields :class:`Message` objects as they arrive from the agent.
+        Yields :class:`Message` objects as text chunks arrive. Each yielded
+        message contains the text received so far (not deltas).
+
+        Parameters
+        ----------
+        text:
+            The prompt text to send.
+        session_id:
+            Optional session ID. If ``None``, uses the client's default
+            session (auto-created on first prompt).
         """
         if not self._connected:
             raise ConnectionError("client is not connected — call connect() first")
 
-        # TODO: Replace with true streaming once the Rust transport
-        # emits SessionUpdate notifications incrementally.
-        messages = await self._rust_client.prompt(text)
+        messages = await self._rust_client.prompt(text, session_id)
         for msg in messages:
             yield msg
 
-    async def prompt_sync(self, text: str) -> list[Message]:
+    async def prompt_stream(
+        self, text: str, *, session_id: str | None = None
+    ) -> AsyncIterator[SessionUpdate]:
+        """Send a prompt and yield real-time :class:`SessionUpdate` objects.
+
+        Unlike :meth:`prompt`, this yields every individual streaming event
+        (text deltas, thought deltas, tool use start/end) as it arrives.
+
+        Parameters
+        ----------
+        text:
+            The prompt text to send.
+        session_id:
+            Optional session ID. If ``None``, uses the client's default
+            session (auto-created on first prompt).
+        """
+        if not self._connected:
+            raise ConnectionError("client is not connected — call connect() first")
+
+        await self._rust_client.send_prompt(text, session_id)
+
+        while True:
+            update = await self._rust_client.recv_update()
+            if update is None:
+                break
+            yield update
+
+    async def prompt_sync(
+        self, text: str, *, session_id: str | None = None
+    ) -> list[Message]:
         """Send a prompt and collect all response messages (non-streaming)."""
-        return [msg async for msg in self.prompt(text)]
+        return [msg async for msg in self.prompt(text, session_id=session_id)]
 
     # -- Control protocol methods -------------------------------------------
 

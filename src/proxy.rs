@@ -4,7 +4,7 @@
 //! agent. They use the `_proxy/successor/*` protocol mediated by a
 //! conductor (from sacp-conductor).
 
-use crate::error::{ConduitError, Result};
+use crate::error::ConduitError;
 use pyo3::prelude::*;
 use std::sync::Arc;
 use tokio::sync::Mutex;
