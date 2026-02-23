@@ -22,6 +22,19 @@ pub struct Capabilities {
     pub models: Vec<String>,
 }
 
+impl Capabilities {
+    /// Construct from ACP agent capabilities received during the initialize handshake.
+    pub fn from_acp(agent_caps: &sacp::schema::AgentCapabilities) -> Self {
+        Self {
+            sessions: agent_caps.load_session,
+            tools: true, // ACP agents always support basic tool use
+            proxy: false,
+            modes: vec![],
+            models: vec![],
+        }
+    }
+}
+
 #[pymethods]
 impl Capabilities {
     #[new]
@@ -163,6 +176,8 @@ impl Message {
 pub enum UpdateKind {
     /// Incremental text chunk.
     TextDelta,
+    /// Incremental thought/reasoning chunk.
+    ThoughtDelta,
     /// Tool invocation started.
     ToolUseStart,
     /// Tool invocation completed.
