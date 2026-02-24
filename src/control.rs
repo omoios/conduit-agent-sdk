@@ -195,9 +195,15 @@ impl RustControlProtocol {
 
             // Background write loop: sends messages to agent stdin.
             let write_handle = tokio::spawn(async move {
+                #[cfg(unix)]
                 use std::os::fd::FromRawFd;
-                // Safety: we trust the caller provides valid FDs from the child process.
+                #[cfg(windows)]
+                use std::os::windows::io::FromRawHandle;
+                // Safety: we trust the caller provides valid FDs/handles from the child process.
+                #[cfg(unix)]
                 let stdin_file = unsafe { std::fs::File::from_raw_fd(stdin_fd as i32) };
+                #[cfg(windows)]
+                let stdin_file = unsafe { std::fs::File::from_raw_handle(stdin_fd as *mut std::ffi::c_void) };
                 let mut stdin = tokio::io::BufWriter::new(tokio::fs::File::from_std(stdin_file));
 
                 while let Some(line) = stdin_rx.recv().await {
@@ -214,8 +220,14 @@ impl RustControlProtocol {
             // Background read loop: reads JSON lines from agent stdout.
             let inner_read = inner.clone();
             let read_handle = tokio::spawn(async move {
+                #[cfg(unix)]
                 use std::os::fd::FromRawFd;
+                #[cfg(windows)]
+                use std::os::windows::io::FromRawHandle;
+                #[cfg(unix)]
                 let stdout_file = unsafe { std::fs::File::from_raw_fd(stdout_fd as i32) };
+                #[cfg(windows)]
+                let stdout_file = unsafe { std::fs::File::from_raw_handle(stdout_fd as *mut std::ffi::c_void) };
                 let stdout = tokio::fs::File::from_std(stdout_file);
                 let mut reader = BufReader::new(stdout).lines();
 
