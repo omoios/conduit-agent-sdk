@@ -1,5 +1,5 @@
 [project]
-name = "conduit-sdk"
+name = "conduit-agent-sdk"
 version = "0.1.0"
 description = "General-purpose Python SDK for the Agent Client Protocol (ACP)"
 readme = "README.md"
