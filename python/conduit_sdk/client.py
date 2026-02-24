@@ -253,9 +253,18 @@ class Client:
 
     # -- Control protocol methods -------------------------------------------
 
-    async def interrupt(self) -> None:
-        """Send an interrupt to stop the agent's current operation."""
-        if self._query is not None:
+    async def interrupt(self, session_id: str | None = None) -> None:
+        """Send an interrupt/cancel to stop the agent's current operation.
+
+        Parameters
+        ----------
+        session_id:
+            If given, sends an ACP CancelNotification for that session.
+            Otherwise falls back to the control-protocol interrupt.
+        """
+        if session_id is not None:
+            await self._rust_client.cancel_session(session_id)
+        elif self._query is not None:
             await self._query.interrupt()
 
     async def set_permission_mode(self, mode: str) -> None:
@@ -268,12 +277,66 @@ class Client:
         if self._query is not None:
             await self._query.set_model(model)
 
+    async def cancel(self, session_id: str) -> None:
+        """Cancel a running prompt in the given session (ACP CancelNotification)."""
+        await self._rust_client.cancel_session(session_id)
+
+    async def set_config(self, session_id: str, config_id: str, value: str) -> dict:
+        """Set a config option on a session. Returns the response as a dict."""
+        import json
+        result_json = await self._rust_client.set_config_option(session_id, config_id, value)
+        return json.loads(result_json)
+
+    async def fork_session(self, session_id: str, cwd: str | None = None) -> Session:
+        """Fork a session, creating a new session with shared history.
+
+        Returns a new :class:`Session` bound to the forked session ID.
+        """
+        new_sid = await self._rust_client.fork_session(session_id, cwd)
+        session = Session(self)
+        session._session_id = new_sid
+        return session
+
+    async def list_sessions(self, cwd: str | None = None) -> list[dict]:
+        """List available sessions from the agent. Returns a list of dicts."""
+        import json
+        result_json = await self._rust_client.list_sessions(cwd)
+        return json.loads(result_json)
+
+    async def resume_session(self, session_id: str, cwd: str | None = None) -> Session:
+        """Resume an existing agent-side session.
+
+        Returns a :class:`Session` bound to the resumed session ID.
+        """
+        resumed_sid = await self._rust_client.resume_session(session_id, cwd)
+        session = Session(self)
+        session._session_id = resumed_sid
+        return session
+
+    @property
+    async def agent_info(self) -> dict | None:
+        """Return agent server info (name, version, title) or None."""
+        import json
+        info_json = await self._rust_client.agent_info()
+        if info_json is None:
+            return None
+        return json.loads(info_json)
+
     # -- Session shortcuts ---------------------------------------------------
 
-    async def new_session(self) -> Session:
-        """Create a new conversation session on this client."""
+    async def new_session(self, cwd: str | None = None) -> Session:
+        """Create a new conversation session on this client.
+
+        Passes system_prompt, model, max_turns, and MCP server configs
+        from :attr:`options` into the ACP ``newSession`` request.
+        """
+        meta_json = None
+        mcp_servers_json = None
+        if self._options is not None:
+            meta_json = self._options.to_meta_json()
+            mcp_servers_json = self._options.to_mcp_servers_json()
         session = Session(self)
-        await session.create()
+        await session.create(cwd, meta_json=meta_json, mcp_servers_json=mcp_servers_json)
         return session
 
     # -- Context manager -----------------------------------------------------

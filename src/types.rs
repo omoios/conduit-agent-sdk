@@ -131,17 +131,20 @@ pub struct Message {
     pub role: MessageRole,
     pub content: Vec<ContentBlock>,
     pub session_id: Option<String>,
+    /// Why the prompt turn ended (e.g. "EndTurn", "Cancelled").
+    pub stop_reason: Option<String>,
 }
 
 #[pymethods]
 impl Message {
     #[new]
-    #[pyo3(signature = (role, content, session_id=None))]
-    fn new(role: MessageRole, content: Vec<ContentBlock>, session_id: Option<String>) -> Self {
+    #[pyo3(signature = (role, content, session_id=None, stop_reason=None))]
+    fn new(role: MessageRole, content: Vec<ContentBlock>, session_id: Option<String>, stop_reason: Option<String>) -> Self {
         Self {
             role,
             content,
             session_id,
+            stop_reason,
         }
     }
 
@@ -182,6 +185,20 @@ pub enum UpdateKind {
     ToolUseStart,
     /// Tool invocation completed.
     ToolUseEnd,
+    /// Tool call status/content update (richer than ToolUseEnd).
+    ToolUseUpdate,
+    /// Agent changed its mode.
+    ModeChange,
+    /// Agent execution plan.
+    Plan,
+    /// Config option changed.
+    ConfigUpdate,
+    /// Available slash commands changed.
+    CommandsUpdate,
+    /// Token usage update.
+    Usage,
+    /// Session title/info update.
+    SessionInfo,
     /// Agent finished responding.
     Done,
     /// An error occurred during processing.
@@ -198,12 +215,34 @@ pub struct SessionUpdate {
     pub tool_input: Option<String>,
     pub tool_use_id: Option<String>,
     pub error: Option<String>,
+    /// Why the prompt turn ended (end_turn, max_tokens, cancelled, etc.).
+    pub stop_reason: Option<String>,
+    /// Tool kind (read, edit, execute, etc.).
+    pub tool_kind: Option<String>,
+    /// Tool status (pending, in_progress, completed, failed).
+    pub tool_status: Option<String>,
+    /// Tool output content as JSON string.
+    pub tool_content: Option<String>,
+    /// Tool file locations as JSON string.
+    pub tool_locations: Option<String>,
+    /// Current mode ID.
+    pub mode_id: Option<String>,
+    /// Plan entries as JSON string.
+    pub plan_json: Option<String>,
+    /// Config options as JSON string.
+    pub config_json: Option<String>,
+    /// Available commands as JSON string.
+    pub commands_json: Option<String>,
+    /// Token usage data as JSON string.
+    pub usage_json: Option<String>,
+    /// Session info as JSON string.
+    pub session_info_json: Option<String>,
 }
 
 #[pymethods]
 impl SessionUpdate {
     #[new]
-    #[pyo3(signature = (kind, text=None, tool_name=None, tool_input=None, tool_use_id=None, error=None))]
+    #[pyo3(signature = (kind, text=None, tool_name=None, tool_input=None, tool_use_id=None, error=None, stop_reason=None, tool_kind=None, tool_status=None, tool_content=None, tool_locations=None, mode_id=None, plan_json=None, config_json=None, commands_json=None, usage_json=None, session_info_json=None))]
     fn new(
         kind: UpdateKind,
         text: Option<String>,
@@ -211,6 +250,17 @@ impl SessionUpdate {
         tool_input: Option<String>,
         tool_use_id: Option<String>,
         error: Option<String>,
+        stop_reason: Option<String>,
+        tool_kind: Option<String>,
+        tool_status: Option<String>,
+        tool_content: Option<String>,
+        tool_locations: Option<String>,
+        mode_id: Option<String>,
+        plan_json: Option<String>,
+        config_json: Option<String>,
+        commands_json: Option<String>,
+        usage_json: Option<String>,
+        session_info_json: Option<String>,
     ) -> Self {
         Self {
             kind,
@@ -219,9 +269,19 @@ impl SessionUpdate {
             tool_input,
             tool_use_id,
             error,
+            stop_reason,
+            tool_kind,
+            tool_status,
+            tool_content,
+            tool_locations,
+            mode_id,
+            plan_json,
+            config_json,
+            commands_json,
+            usage_json,
+            session_info_json,
         }
     }
-
     fn __repr__(&self) -> String {
         format!("SessionUpdate(kind={:?})", self.kind)
     }

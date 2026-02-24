@@ -96,3 +96,32 @@ class AgentOptions:
         if self.hooks is not None:
             result["hooks"] = self.hooks
         return result
+
+    def to_meta_json(self) -> str | None:
+        """Build the ACP _meta dict for NewSession, serialized as JSON."""
+        import json
+        meta: dict[str, Any] = {}
+        if self.system_prompt is not None:
+            meta["system_prompt"] = self.system_prompt
+        if self.model is not None:
+            meta["model"] = self.model
+        if self.max_turns is not None:
+            meta["max_turns"] = self.max_turns
+        if self.permission_mode is not None:
+            meta["permission_mode"] = self.permission_mode
+        return json.dumps(meta) if meta else None
+
+    def to_mcp_servers_json(self) -> str | None:
+        """Serialize MCP server configs as JSON for NewSession."""
+        import json
+        if not self.mcp_servers:
+            return None
+        servers = []
+        for name, cfg in self.mcp_servers.items():
+            if hasattr(cfg, "to_dict"):
+                srv = cfg.to_dict()
+            else:
+                srv = dict(cfg)
+            srv["name"] = name
+            servers.append(srv)
+        return json.dumps(servers)

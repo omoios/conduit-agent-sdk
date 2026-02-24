@@ -36,7 +36,7 @@ from __future__ import annotations
 from conduit_sdk._conduit_sdk import __version__
 
 # Public API — high-level classes.
-from conduit_sdk.activate import query
+from conduit_sdk.activate import query as _query_func
 from conduit_sdk.client import Client
 from conduit_sdk.exceptions import (
     AgentNotFoundError,
@@ -68,6 +68,10 @@ from conduit_sdk.permissions import (
 )
 from conduit_sdk.proxy import ContextInjector, Proxy, ProxyChain, ResponseFilter
 from conduit_sdk.query import Query
+
+# Re-bind the query function AFTER importing the query submodule (which
+# would otherwise shadow the function import due to Python's module system).
+query = _query_func  # noqa: F811
 from conduit_sdk.registry import AgentInfo, Registry
 from conduit_sdk.session import Session
 from conduit_sdk.tools import McpSdkServerConfig, create_mcp_server, create_sdk_mcp_server, tool

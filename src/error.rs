@@ -43,9 +43,37 @@ pub enum ConduitError {
 
 impl From<ConduitError> for PyErr {
     fn from(err: ConduitError) -> PyErr {
-        // TODO: Map to specific Python exception subclasses once they're
-        // registered on the module. For now, all errors surface as RuntimeError.
-        PyRuntimeError::new_err(err.to_string())
+        // Map each ConduitError variant to its corresponding Python exception
+        // subclass in `conduit_sdk.exceptions`.
+        let msg = err.to_string();
+        Python::with_gil(|py| {
+            let class_name = match &err {
+                ConduitError::Connection(_) => "ConnectionError",
+                ConduitError::Session(_) => "SessionError",
+                ConduitError::Transport(_) => "TransportError",
+                ConduitError::Protocol(_) => "ProtocolError",
+                ConduitError::Tool(_) => "ToolError",
+                ConduitError::Hook(_) => "HookError",
+                ConduitError::Proxy(_) => "ProxyError",
+                ConduitError::Timeout(_) => "TimeoutError",
+                ConduitError::PermissionDenied(_) => "PermissionError",
+                ConduitError::Cancelled => "CancelledError",
+                ConduitError::Other(_) => "ConduitError",
+            };
+            // Try to import the exception class from conduit_sdk.exceptions.
+            // Fall back to RuntimeError if the import fails.
+            match py.import("conduit_sdk.exceptions")
+                .and_then(|m| m.getattr(class_name))
+            {
+                Ok(exc_class) => {
+                    match exc_class.call1((msg.clone(),)) {
+                        Ok(instance) => PyErr::from_value(instance),
+                        Err(_) => PyRuntimeError::new_err(msg),
+                    }
+                }
+                Err(_) => PyRuntimeError::new_err(msg),
+            }
+        })
     }
 }
 

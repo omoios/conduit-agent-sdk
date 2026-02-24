@@ -34,9 +34,17 @@ class Session:
 
     # -- Lifecycle -----------------------------------------------------------
 
-    async def create(self, cwd: str | None = None) -> str:
+    async def create(
+        self,
+        cwd: str | None = None,
+        *,
+        meta_json: str | None = None,
+        mcp_servers_json: str | None = None,
+    ) -> str:
         """Create a new ACP session and return its ID."""
-        self._session_id = await self._client._rust_client.new_session(cwd)
+        self._session_id = await self._client._rust_client.new_session(
+            cwd, meta_json, mcp_servers_json
+        )
         return self._session_id
 
     async def load(self, session_id: str, cwd: str | None = None) -> str:
@@ -54,6 +62,24 @@ class Session:
             raise SessionError("session not created")
         await self._client._rust_client.set_session_mode(self._session_id, mode)
         self._mode = mode
+
+    async def set_config(self, config_id: str, value: str) -> dict:
+        """Set a configuration option on this session."""
+        if self._session_id is None:
+            raise SessionError("session not created")
+        return await self._client.set_config(self._session_id, config_id, value)
+
+    async def cancel(self) -> None:
+        """Cancel/interrupt the current operation in this session."""
+        if self._session_id is None:
+            raise SessionError("session not created")
+        await self._client.cancel(self._session_id)
+
+    async def fork(self, cwd: str | None = None) -> Session:
+        """Fork this session into a new one with shared history."""
+        if self._session_id is None:
+            raise SessionError("session not created")
+        return await self._client.fork_session(self._session_id, cwd)
 
     # -- Prompting -----------------------------------------------------------
 
