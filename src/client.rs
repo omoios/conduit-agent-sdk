@@ -18,8 +18,8 @@ use crate::types::{
 };
 use pyo3::prelude::*;
 use sacp::schema::{
-    CancelNotification, ContentBlock as AcpContentBlock, Implementation,
-    InitializeRequest, LoadSessionRequest, NewSessionRequest,
+    AgentNotification, CancelNotification, ContentBlock as AcpContentBlock,
+    Implementation, InitializeRequest, LoadSessionRequest, NewSessionRequest,
     PermissionOptionKind, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SelectedPermissionOutcome,
     SessionNotification, SetSessionModeRequest,
@@ -127,6 +127,10 @@ enum StreamEvent {
     Done {
         stop_reason: Option<String>,
     },
+    RateLimit {
+        method: String,
+        params_json: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +224,7 @@ impl RustClient {
             // Clone update_tx for the notification handler (the other copy
             // goes into the spawned task to send Done events).
             let notif_tx = update_tx.clone();
+            let ext_notif_tx = update_tx.clone();
 
             // Clone the permission callback for the request handler.
             let perm_callback = perm_callback_for_connect;
@@ -353,6 +358,22 @@ impl RustClient {
                             _ => {
                                 // Future variants — ignore gracefully.
                             }
+                        }
+                        Ok(())
+                    },
+                )
+                // --- Extension notifications (rate_limit_event, etc.) ---
+                .on_receive_notification(
+                    async move |notification: AgentNotification, _cx| {
+                        if let AgentNotification::ExtNotification(ext) = notification {
+                            let method = ext.method.to_string();
+                            let params_json = ext.params.to_string();
+                            let _ = ext_notif_tx
+                                .send(StreamEvent::RateLimit {
+                                    method,
+                                    params_json,
+                                })
+                                .await;
                         }
                         Ok(())
                     },
@@ -867,7 +888,8 @@ impl RustClient {
                         | Some(StreamEvent::ConfigUpdate { .. })
                         | Some(StreamEvent::CommandsUpdate { .. })
                         | Some(StreamEvent::Usage { .. })
-                        | Some(StreamEvent::SessionInfo { .. }) => {
+                        | Some(StreamEvent::SessionInfo { .. })
+                        | Some(StreamEvent::RateLimit { .. }) => {
                             // Non-text events consumed in batch mode.
                         }
                         Some(StreamEvent::Done { stop_reason: sr }) => {
@@ -1019,6 +1041,7 @@ impl RustClient {
                 commands_json: None,
                 usage_json: None,
                 session_info_json: None,
+                rate_limit_json: None,
             };
 
             match update_rx.recv().await {
@@ -1113,6 +1136,14 @@ impl RustClient {
                         Ok(None)
                     }
                 }
+                Some(StreamEvent::RateLimit { method, params_json }) => Ok(Some(SessionUpdate {
+                    kind: UpdateKind::RateLimit,
+                    rate_limit_json: Some(serde_json::json!({
+                        "method": method,
+                        "params": serde_json::from_str::<serde_json::Value>(&params_json).unwrap_or_default(),
+                    }).to_string()),
+                    ..su_defaults()
+                })),
                 None => Ok(None),
             }
         })

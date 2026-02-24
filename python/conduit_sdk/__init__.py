@@ -74,7 +74,12 @@ from conduit_sdk.query import Query
 query = _query_func  # noqa: F811
 from conduit_sdk.registry import AgentInfo, Registry
 from conduit_sdk.session import Session
-from conduit_sdk.tools import McpSdkServerConfig, create_mcp_server, create_sdk_mcp_server, tool
+from conduit_sdk.tools import (
+    McpSdkServerConfig,
+    create_mcp_server,
+    create_sdk_mcp_server,
+    tool,
+)
 from conduit_sdk.types import (
     AudioBlock,
     Capabilities,
@@ -91,6 +96,7 @@ from conduit_sdk.types import (
     PermissionRequest,
     PermissionResponse,
     PromptContent,
+    RateLimitInfo,
     ResourceLinkBlock,
     ResultMessage,
     SessionUpdate,
@@ -167,6 +173,8 @@ __all__ = [
     "ResourceLinkBlock",
     "EmbeddedResourceBlock",
     "PromptContent",
+    # Types — rate limit
+    "RateLimitInfo",
     # Exceptions
     "ConduitError",
     "ConnectionError",

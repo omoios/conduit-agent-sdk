@@ -203,6 +203,8 @@ pub enum UpdateKind {
     Done,
     /// An error occurred during processing.
     Error,
+    /// Rate limit event from the agent (extension notification).
+    RateLimit,
 }
 
 /// A real-time streaming update from the agent during a session.
@@ -237,12 +239,14 @@ pub struct SessionUpdate {
     pub usage_json: Option<String>,
     /// Session info as JSON string.
     pub session_info_json: Option<String>,
+    /// Rate limit event data as JSON string.
+    pub rate_limit_json: Option<String>,
 }
 
 #[pymethods]
 impl SessionUpdate {
     #[new]
-    #[pyo3(signature = (kind, text=None, tool_name=None, tool_input=None, tool_use_id=None, error=None, stop_reason=None, tool_kind=None, tool_status=None, tool_content=None, tool_locations=None, mode_id=None, plan_json=None, config_json=None, commands_json=None, usage_json=None, session_info_json=None))]
+    #[pyo3(signature = (kind, text=None, tool_name=None, tool_input=None, tool_use_id=None, error=None, stop_reason=None, tool_kind=None, tool_status=None, tool_content=None, tool_locations=None, mode_id=None, plan_json=None, config_json=None, commands_json=None, usage_json=None, session_info_json=None, rate_limit_json=None))]
     fn new(
         kind: UpdateKind,
         text: Option<String>,
@@ -261,6 +265,7 @@ impl SessionUpdate {
         commands_json: Option<String>,
         usage_json: Option<String>,
         session_info_json: Option<String>,
+        rate_limit_json: Option<String>,
     ) -> Self {
         Self {
             kind,
@@ -280,6 +285,7 @@ impl SessionUpdate {
             commands_json,
             usage_json,
             session_info_json,
+            rate_limit_json,
         }
     }
     fn __repr__(&self) -> String {
