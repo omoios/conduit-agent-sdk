@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: depot-ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cargo build
+        run: cargo build
+      - name: Install dev dependencies
+        run: |
+          pip install uv
+          pip install maturin
+          maturin develop --uv
+          uv pip install pytest pytest-asyncio ruff
+      - name: Ruff check
+        run: ruff check python/
+      - name: Run tests
+        run: pytest tests/ -v

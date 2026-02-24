@@ -1,7 +1,10 @@
 [package]
-name = "conduit-agent-sdk"
+name = "conduit-sdk"
 version = "0.1.0"
 edition = "2021"
+description = "General-purpose Python SDK for the Agent Client Protocol (ACP)"
+license = "MIT"
+repository = "https://github.com/omoios/conduit-agent-sdk"
 
 [lib]
 name = "_conduit_sdk"

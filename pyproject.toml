@@ -1,11 +1,31 @@
 [project]
-name = "conduit-agent-sdk"
+name = "conduit-sdk"
 version = "0.1.0"
 description = "General-purpose Python SDK for the Agent Client Protocol (ACP)"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
+authors = [{name = "omoios"}]
+keywords = ["acp", "agent", "protocol", "sdk", "ai", "llm", "agent-client-protocol"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/omoios/conduit-agent-sdk"
+Repository = "https://github.com/omoios/conduit-agent-sdk"
+Issues = "https://github.com/omoios/conduit-agent-sdk/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.9"]
