@@ -76,17 +76,22 @@ from conduit_sdk.registry import AgentInfo, Registry
 from conduit_sdk.session import Session
 from conduit_sdk.tools import McpSdkServerConfig, create_mcp_server, create_sdk_mcp_server, tool
 from conduit_sdk.types import (
+    AudioBlock,
     Capabilities,
     ClientConfig,
     ContentBlock,
     ContentType,
     ControlMessage,
     ControlResponse,
+    EmbeddedResourceBlock,
     HookContext,
+    ImageBlock,
     Message,
     MessageRole,
     PermissionRequest,
     PermissionResponse,
+    PromptContent,
+    ResourceLinkBlock,
     ResultMessage,
     SessionUpdate,
     StreamEvent,
@@ -156,6 +161,12 @@ __all__ = [
     "ThinkingBlock",
     "ToolUseBlock",
     "ToolResultBlock",
+    # Types — rich content (multi-modal)
+    "ImageBlock",
+    "AudioBlock",
+    "ResourceLinkBlock",
+    "EmbeddedResourceBlock",
+    "PromptContent",
     # Exceptions
     "ConduitError",
     "ConnectionError",

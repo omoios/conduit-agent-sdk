@@ -193,52 +193,78 @@ class Client:
     def query(self) -> Query | None:
         return self._query
 
+    # -- Internal helpers ---------------------------------------------------
+
+    @staticmethod
+    def _prepare_prompt(text: str | list) -> tuple[str, str | None]:
+        """Normalize prompt input to (text_str, content_json).
+
+        Returns a plain text string (always used as fallback) and an optional
+        JSON-serialized content block array for rich/multi-modal prompts.
+        """
+        if isinstance(text, str):
+            return text, None
+        # List of content blocks
+        from conduit_sdk.types import _serialize_content_blocks
+
+        # Extract a text fallback from the first text-like block
+        fallback = ""
+        for item in text:
+            if isinstance(item, str):
+                fallback = item
+                break
+            if hasattr(item, "text") and isinstance(getattr(item, "text"), str):
+                fallback = item.text
+                break
+        return fallback, _serialize_content_blocks(text)
+
     # -- Prompting -----------------------------------------------------------
 
     async def prompt(
-        self, text: str, *, session_id: str | None = None
+        self,
+        text: str | list,
+        *,
+        session_id: str | None = None,
     ) -> AsyncIterator[Message]:
         """Send a prompt to the agent and stream back response messages.
-
-        Yields :class:`Message` objects as text chunks arrive. Each yielded
         message contains the text received so far (not deltas).
-
-        Parameters
         ----------
         text:
-            The prompt text to send.
+            The prompt text (string) or a list of content blocks
+            (:class:`TextBlock`, :class:`ImageBlock`, :class:`AudioBlock`,
+            :class:`ResourceLinkBlock`, :class:`EmbeddedResourceBlock`, or plain strings).
         session_id:
             Optional session ID. If ``None``, uses the client's default
             session (auto-created on first prompt).
         """
         if not self._connected:
-            raise ConnectionError("client is not connected — call connect() first")
+            raise ConnectionError("client is not connected \u2014 call connect() first")
 
-        messages = await self._rust_client.prompt(text, session_id)
+        text_str, content_json = self._prepare_prompt(text)
+        messages = await self._rust_client.prompt(text_str, session_id, content_json)
         for msg in messages:
             yield msg
 
     async def prompt_stream(
-        self, text: str, *, session_id: str | None = None
+        self,
+        text: str | list,
+        *,
+        session_id: str | None = None,
     ) -> AsyncIterator[SessionUpdate]:
         """Send a prompt and yield real-time :class:`SessionUpdate` objects.
-
-        Unlike :meth:`prompt`, this yields every individual streaming event
         (text deltas, thought deltas, tool use start/end) as it arrives.
-
-        Parameters
         ----------
         text:
-            The prompt text to send.
+            The prompt text (string) or a list of content blocks.
         session_id:
             Optional session ID. If ``None``, uses the client's default
             session (auto-created on first prompt).
         """
         if not self._connected:
-            raise ConnectionError("client is not connected — call connect() first")
+            raise ConnectionError("client is not connected \u2014 call connect() first")
 
-        await self._rust_client.send_prompt(text, session_id)
-
+        text_str, content_json = self._prepare_prompt(text)
+        await self._rust_client.send_prompt(text_str, session_id, content_json)
         while True:
             update = await self._rust_client.recv_update()
             if update is None:
@@ -246,7 +272,7 @@ class Client:
             yield update
 
     async def prompt_sync(
-        self, text: str, *, session_id: str | None = None
+        self, text: str | list, *, session_id: str | None = None
     ) -> list[Message]:
         """Send a prompt and collect all response messages (non-streaming)."""
         return [msg async for msg in self.prompt(text, session_id=session_id)]

@@ -146,3 +146,140 @@ class ToolResultBlock:
             text=self.text,
             tool_use_id=self.tool_use_id,
         )
+
+
+
+# ---------------------------------------------------------------------------
+# Rich content block types — for multi-modal prompts (Phase 3 Item 10)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ImageBlock:
+    """An image content block for multi-modal prompts.
+
+    Parameters
+    ----------
+    data:
+        Base64-encoded image data.
+    mime_type:
+        MIME type (e.g. ``"image/png"``, ``"image/jpeg"``).
+    uri:
+        Optional URI for the image source.
+    """
+
+    data: str
+    mime_type: str
+    uri: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"type": "image", "data": self.data, "mimeType": self.mime_type}
+        if self.uri is not None:
+            d["uri"] = self.uri
+        return d
+
+
+@dataclass
+class AudioBlock:
+    """An audio content block for multi-modal prompts.
+
+    Parameters
+    ----------
+    data:
+        Base64-encoded audio data.
+    mime_type:
+        MIME type (e.g. ``"audio/wav"``, ``"audio/mp3"``).
+    """
+
+    data: str
+    mime_type: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": "audio", "data": self.data, "mimeType": self.mime_type}
+
+
+@dataclass
+class ResourceLinkBlock:
+    """A resource link content block — references a resource by URI.
+
+    Parameters
+    ----------
+    uri:
+        The URI of the resource.
+    name:
+        Optional display name.
+    description:
+        Optional description.
+    mime_type:
+        Optional MIME type hint.
+    """
+
+    uri: str
+    name: str | None = None
+    description: str | None = None
+    mime_type: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"type": "resource_link", "uri": self.uri}
+        if self.name is not None:
+            d["name"] = self.name
+        if self.description is not None:
+            d["description"] = self.description
+        if self.mime_type is not None:
+            d["mimeType"] = self.mime_type
+        return d
+
+
+@dataclass
+class EmbeddedResourceBlock:
+    """An embedded resource content block — includes full resource contents inline.
+
+    Parameters
+    ----------
+    uri:
+        The URI identifying the resource.
+    text:
+        Text content of the resource (for text resources).
+    mime_type:
+        Optional MIME type.
+    blob:
+        Base64-encoded binary content (for non-text resources).
+    """
+
+    uri: str
+    text: str | None = None
+    mime_type: str | None = None
+    blob: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        resource: dict[str, Any] = {"uri": self.uri}
+        if self.text is not None:
+            resource["text"] = self.text
+        if self.mime_type is not None:
+            resource["mimeType"] = self.mime_type
+        if self.blob is not None:
+            resource["blob"] = self.blob
+        return {"type": "resource", "resource": resource}
+
+
+# Union type for prompt content
+PromptContent = str | TextBlock | ImageBlock | AudioBlock | ResourceLinkBlock | EmbeddedResourceBlock
+
+
+def _serialize_content_blocks(content: list[PromptContent]) -> str:
+    """Serialize a list of content blocks to JSON for the Rust layer.
+
+    Accepts a mix of strings and typed block objects.
+    """
+    import json
+    blocks: list[dict[str, Any]] = []
+    for item in content:
+        if isinstance(item, str):
+            blocks.append({"type": "text", "text": item})
+        elif isinstance(item, TextBlock):
+            blocks.append({"type": "text", "text": item.text})
+        elif hasattr(item, "to_dict"):
+            blocks.append(item.to_dict())
+        else:
+            raise TypeError(f"unsupported content block type: {type(item).__name__}")
+    return json.dumps(blocks)

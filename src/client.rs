@@ -79,6 +79,7 @@ enum AcpCommand {
     Prompt {
         session_id: String,
         text: String,
+        content_json: Option<String>,
         reply: oneshot::Sender<Result<(), ConduitError>>,
     },
     Shutdown,
@@ -765,12 +766,13 @@ impl RustClient {
     ///
     /// Returns a list of [`Message`] objects. Streaming is handled at the
     /// Python layer by wrapping this in an async iterator.
-    #[pyo3(signature = (text, session_id=None))]
+    #[pyo3(signature = (text, session_id=None, content_json=None))]
     fn prompt<'py>(
         &self,
         py: Python<'py>,
         text: String,
         session_id: Option<String>,
+        content_json: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let update_rx_slot = self.update_rx.clone();
@@ -831,6 +833,7 @@ impl RustClient {
                 .send(AcpCommand::Prompt {
                     session_id: session_id.clone(),
                     text,
+                    content_json: content_json.clone(),
                     reply: reply_tx,
                 })
                 .await
@@ -908,12 +911,13 @@ impl RustClient {
     /// Use with [`recv_update`] for real-time streaming. The prompt is sent
     /// to the background ACP task and streaming events can be polled via
     /// `recv_update()` until `None` is returned.
-    #[pyo3(signature = (text, session_id=None))]
+    #[pyo3(signature = (text, session_id=None, content_json=None))]
     fn send_prompt<'py>(
         &self,
         py: Python<'py>,
         text: String,
         session_id: Option<String>,
+        content_json: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         let prompt_reply_rx = self.prompt_reply_rx.clone();
@@ -971,6 +975,7 @@ impl RustClient {
                 .send(AcpCommand::Prompt {
                     session_id,
                     text,
+                    content_json,
                     reply: reply_tx,
                 })
                 .await
@@ -1394,10 +1399,19 @@ async fn acp_task(
             AcpCommand::Prompt {
                 session_id,
                 text,
+                content_json,
                 reply,
             } => {
+                // Build content blocks: use rich content JSON if provided,
+                // otherwise wrap the text string as a single Text block.
+                let content_blocks: Vec<sacp::schema::ContentBlock> = match content_json {
+                    Some(json_str) => {
+                        serde_json::from_str(&json_str).unwrap_or_else(|_| vec![text.into()])
+                    }
+                    None => vec![text.into()],
+                };
                 let result = cx
-                    .send_request(PromptRequest::new(session_id, vec![text.into()]))
+                    .send_request(PromptRequest::new(session_id, content_blocks))
                     .block_task()
                     .await;
                 // Yield to the runtime to let any in-flight notification
