@@ -277,6 +277,100 @@ class Client:
         """Send a prompt and collect all response messages (non-streaming)."""
         return [msg async for msg in self.prompt(text, session_id=session_id)]
 
+    # -- Skill activation ---------------------------------------------------
+
+    @staticmethod
+    def _normalize_command(command: str) -> str:
+        """Ensure a command string starts with ``/``."""
+        command = command.strip()
+        if not command.startswith("/"):
+            command = f"/{command}"
+        return command
+
+    async def activate_skill(
+        self,
+        command: str,
+        *,
+        session_id: str | None = None,
+    ) -> str:
+        """Activate a single slash command (skill) and return the response text.
+
+        The command is normalized to include the ``/`` prefix if missing.
+
+        Parameters
+        ----------
+        command:
+            Slash command to activate (e.g. ``"/help"`` or ``"help"``).
+        session_id:
+            Optional session ID. If ``None``, uses the default session.
+
+        Returns
+        -------
+        str
+            The collected text response from the agent.
+
+        Example
+        -------
+        ::
+
+            text = await client.activate_skill("/help")
+            text = await client.activate_skill("compact")  # auto-prefixed
+        """
+        normalized = self._normalize_command(command)
+        messages = await self.prompt_sync(normalized, session_id=session_id)
+        return "".join(msg.text() for msg in messages)
+
+    async def activate_skills(
+        self,
+        commands: list[str],
+        *,
+        session_id: str | None = None,
+    ) -> list:
+        """Activate multiple slash commands sequentially and return results.
+
+        Each command is sent as a separate prompt. Results are collected in
+        order, one :class:`~conduit_sdk.types.SkillResult` per command.
+
+        Parameters
+        ----------
+        commands:
+            List of slash commands (e.g. ``["/help", "/compact"]``).
+            The ``/`` prefix is added automatically if missing.
+        session_id:
+            Optional session ID. If ``None``, uses the default session.
+
+        Returns
+        -------
+        list[SkillResult]
+            One result per command, in order.
+
+        Example
+        -------
+        ::
+
+            results = await client.activate_skills(["/help", "compact", "/cost"])
+            for r in results:
+                print(f"{r.command}: {r.text[:80]}")
+        """
+        from conduit_sdk.types import SkillResult
+
+        results: list[SkillResult] = []
+        for cmd in commands:
+            normalized = self._normalize_command(cmd)
+            try:
+                text = await self.activate_skill(normalized, session_id=session_id)
+                results.append(SkillResult(command=normalized, text=text, success=True))
+            except Exception as exc:  # noqa: BLE001
+                results.append(
+                    SkillResult(
+                        command=normalized,
+                        text="",
+                        success=False,
+                        error=str(exc),
+                    )
+                )
+        return results
+
     # -- Control protocol methods -------------------------------------------
 
     async def interrupt(self, session_id: str | None = None) -> None:

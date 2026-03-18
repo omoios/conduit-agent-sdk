@@ -264,6 +264,8 @@ uv run examples/01_hello_world.py
 | 26 | 26_agent_info.py | Agent name/version/title |
 | 27 | 27_rich_content.py | Multi-modal prompts (images, etc.) |
 | 28 | 28_rate_limit_awareness.py | Rate limit handling |
+| 29 | 29_skill_activation.py | Discover and activate slash commands (skills) |
+| 30 | 30_integration_skills.py | Full integration: discover all skills, activate_skill/activate_skills |
 
 ## API Overview
 

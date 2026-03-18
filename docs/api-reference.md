@@ -686,6 +686,88 @@ async for msg in session.prompt([
     print(msg.text())
 ```
 
+## Skills & Commands (Slash Commands)
+
+Agents advertise available slash commands via `AvailableCommandsUpdate` streaming notifications. Skills are activated by sending the command text as a prompt.
+
+See [Skills & Commands Guide](skills-and-commands.md) for the full explanation.
+
+### Discovery
+
+Available commands appear as `SessionUpdate` events with `kind == UpdateKind.CommandsUpdate`:
+
+```python
+import json
+from conduit_sdk._conduit_sdk import UpdateKind
+
+async for update in client.prompt_stream("Hello"):
+    if update.kind == UpdateKind.CommandsUpdate:
+        commands = json.loads(update.commands_json)
+        for cmd in commands:
+            print(f"{cmd['name']}: {cmd.get('description', '')}")
+```
+
+The `commands_json` field contains a JSON array of command objects with at minimum a `name` field.
+
+### Activation (Low-Level)
+
+Send the slash command as prompt text:
+
+```python
+# Activate /help
+async for msg in client.prompt("/help"):
+    print(msg.text())
+```
+
+### Activation (High-Level)
+
+**`await client.activate_skill(command, *, session_id=None) -> str`**
+
+Activate a single slash command and return the collected response text.
+The `/` prefix is added automatically if missing.
+
+```python
+text = await client.activate_skill("/help")
+text = await client.activate_skill("compact")  # auto-prefixed to /compact
+```
+
+**`await client.activate_skills(commands, *, session_id=None) -> list[SkillResult]`**
+
+Activate multiple slash commands sequentially. Returns one `SkillResult` per command.
+Errors are captured per-command without stopping the batch.
+
+```python
+from conduit_sdk import SkillResult
+
+results = await client.activate_skills(["/help", "compact", "/cost"])
+for r in results:
+    print(f"{r.command}: {'OK' if r.success else r.error}")
+```
+
+Both methods are also available on `Session`:
+
+```python
+text = await session.activate_skill("/help")
+results = await session.activate_skills(["/help", "/cost"])
+```
+
+### SkillResult
+
+```python
+@dataclass
+class SkillResult:
+    command: str           # Normalized command (with /)
+    text: str = ""         # Response text (empty on failure)
+    success: bool = True   # Whether the command completed
+    error: str | None = None  # Error message if failed
+```
+
+### Relevant Types
+
+- `UpdateKind.CommandsUpdate` — Identifies a commands update event
+- `SessionUpdate.commands_json` (str | None) — JSON string of available commands
+- `SkillResult` — Result from `activate_skill` / `activate_skills`
+- Commands are agent-specific; always discover dynamically via streaming
 ## conduit_sdk.exceptions
 
 Exception hierarchy:

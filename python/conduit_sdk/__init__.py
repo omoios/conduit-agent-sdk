@@ -81,6 +81,7 @@ from conduit_sdk.tools import (
     tool,
 )
 from conduit_sdk.types import (
+    Agent,
     AudioBlock,
     Capabilities,
     ClientConfig,
@@ -100,6 +101,7 @@ from conduit_sdk.types import (
     ResourceLinkBlock,
     ResultMessage,
     SessionUpdate,
+    SkillResult,
     StreamEvent,
     TextBlock,
     ThinkingBlock,
@@ -175,7 +177,10 @@ __all__ = [
     "PromptContent",
     # Types — rate limit
     "RateLimitInfo",
-    # Exceptions
+    # Types — skill activation
+    "SkillResult",
+    # Agent enum
+    "Agent",
     "ConduitError",
     "ConnectionError",
     "SessionError",

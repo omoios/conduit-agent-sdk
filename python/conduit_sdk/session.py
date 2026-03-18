@@ -89,6 +89,46 @@ class Session:
             raise SessionError("session not created — call create() first")
         return await self._client.prompt_sync(text, session_id=self._session_id)
 
+    # -- Skill activation ---------------------------------------------------
+
+    async def activate_skill(self, command: str) -> str:
+        """Activate a single slash command in this session.
+
+        Parameters
+        ----------
+        command:
+            Slash command (e.g. ``"/help"`` or ``"help"``).
+            The ``/`` prefix is added automatically if missing.
+
+        Returns
+        -------
+        str
+            The collected text response.
+        """
+        if self._session_id is None:
+            raise SessionError("session not created — call create() first")
+        return await self._client.activate_skill(
+            command, session_id=self._session_id
+        )
+
+    async def activate_skills(self, commands: list[str]) -> list:
+        """Activate multiple slash commands sequentially in this session.
+
+        Parameters
+        ----------
+        commands:
+            List of slash commands. The ``/`` prefix is added automatically.
+
+        Returns
+        -------
+        list[SkillResult]
+            One result per command, in order.
+        """
+        if self._session_id is None:
+            raise SessionError("session not created — call create() first")
+        return await self._client.activate_skills(
+            commands, session_id=self._session_id
+        )
     # -- Properties ----------------------------------------------------------
 
     @property

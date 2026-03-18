@@ -7,6 +7,7 @@ pure-Python convenience types where needed.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 # Re-export Rust-defined types so the rest of the Python layer
@@ -56,7 +57,76 @@ __all__ = [
     "ToolResultBlock",
     # Rate limit
     "RateLimitInfo",
+    # Skill activation
+    "SkillResult",
+    # Agent enum
+    "Agent",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Agent enum — known ACP agents
+# ---------------------------------------------------------------------------
+
+
+class Agent(str, Enum):
+    """Known ACP-compatible agents.
+
+    Each member’s value is the **ACP registry ID** when available, or a
+    direct shell command joined by spaces when the agent is local-only.
+
+    Use with :meth:`Client.from_registry` for registry agents::
+
+        from conduit_sdk import Agent, Client
+
+        client = await Client.from_registry(Agent.OPENCODE)
+        client = await Client.from_registry(Agent.CLAUDE)
+
+    For agents not in the registry, use :meth:`Agent.to_command` or pass
+    the command list directly::
+
+        client = Client(Agent.HERMES.to_command())
+
+    Because ``Agent`` extends ``str``, registry agents also work anywhere
+    a plain string registry ID is accepted.
+    """
+
+    # --- Registry agents (resolve via ACP registry) ---
+    AMP = "amp-acp"
+    AUGGIE = "auggie"
+    CLAUDE = "claude-acp"
+    CLINE = "cline"
+    CODEX = "codex-acp"
+    CURSOR = "cursor"
+    GEMINI = "gemini"
+    GOOSE = "goose"
+    JUNIE = "junie"
+    KILO = "kilo"
+    OPENCODE = "opencode"
+    QODER = "qoder"
+
+    # --- Local-only agents (not in registry, use to_command()) ---
+    HERMES = "hermes acp"
+
+    def to_command(self) -> list[str]:
+        """Convert to a shell command list.
+
+        For registry agents this splits the value on spaces.
+        For local agents this is the canonical way to get the command::
+
+            Client(Agent.HERMES.to_command())  # ["hermes", "acp"]
+        """
+        return self.value.split()
+
+    @property
+    def is_registry(self) -> bool:
+        """Whether this agent is available in the ACP registry.
+
+        If ``True``, use :meth:`Client.from_registry`.
+        If ``False``, use ``Client(agent.to_command())``.
+        """
+        # Local-only agents have spaces in their value (e.g. "hermes acp")
+        return " " not in self.value
 
 
 @dataclass
@@ -348,3 +418,30 @@ def _serialize_content_blocks(content: list[PromptContent]) -> str:
         else:
             raise TypeError(f"unsupported content block type: {type(item).__name__}")
     return json.dumps(blocks)
+
+
+# ---------------------------------------------------------------------------
+# Skill activation result
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SkillResult:
+    """Result of a slash command (skill) activation.
+
+    Attributes
+    ----------
+    command:
+        The slash command that was sent (with ``/`` prefix).
+    text:
+        The text response from the agent, or an empty string on failure.
+    success:
+        Whether the command completed without error.
+    error:
+        Error message if the command failed, otherwise ``None``.
+    """
+
+    command: str
+    text: str = ""
+    success: bool = True
+    error: str | None = None
