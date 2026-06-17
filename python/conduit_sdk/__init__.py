@@ -86,6 +86,8 @@ from conduit_sdk.session import Session
 from conduit_sdk.agent import AgentContext, AgentServer
 from conduit_sdk.tools import (
     McpSdkServerConfig,
+    StructuredOutputValidationError,
+    constrained_tool,
     create_mcp_server,
     create_sdk_mcp_server,
     tool,
@@ -166,6 +168,8 @@ __all__ = [
     "console_approve",
     # Tools
     "tool",
+    "constrained_tool",
+    "StructuredOutputValidationError",
     "create_mcp_server",
     "create_sdk_mcp_server",
     "McpSdkServerConfig",

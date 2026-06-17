@@ -27,6 +27,7 @@ import asyncio
 import functools
 import inspect
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, get_args, get_origin, get_type_hints
@@ -36,6 +37,8 @@ from conduit_sdk.exceptions import ToolError
 
 __all__ = [
     "tool",
+    "constrained_tool",
+    "StructuredOutputValidationError",
     "create_mcp_server",
     "create_sdk_mcp_server",
     "McpSdkServerConfig",
@@ -92,6 +95,194 @@ def tool(
             return await fn(*args, **kwargs)
 
         wrapper._tool_definition = definition  # type: ignore[attr-defined]
+        return wrapper
+
+    return decorator
+
+
+# ---------------------------------------------------------------------------
+# StructuredOutput: constrained_tool decorator + stdlib-only validator
+# ---------------------------------------------------------------------------
+
+
+class StructuredOutputValidationError(Exception):
+    """Raised when a constrained tool's output fails JSON Schema validation.
+
+    The error message includes all validation errors collected.
+    """
+
+    def __init__(self, errors: list[str]) -> None:
+        self.errors = errors
+        msg = "Output validation failed:\n" + "\n".join(
+            f"  - {e}" for e in errors
+        )
+        super().__init__(msg)
+
+
+def _validate_against_schema(
+    value: Any,
+    schema: dict[str, Any],
+    path: str = "",
+) -> list[str]:
+    """Validate *value* against a JSON Schema subset using only stdlib.
+
+    Returns a list of human-readable error strings (empty = valid).
+    Each error is prefixed with a JSON-pointer-like path.
+
+    Supported keywords: type, required, properties, items, enum,
+    additionalProperties, minimum, maximum, minLength, maxLength, pattern.
+    Unknown keywords (``$ref``, ``$schema``) are silently ignored.
+    """
+    errors: list[str] = []
+
+    # Gracefully skip unsupported features
+    if "$ref" in schema:
+        return errors
+
+    schema_type = schema.get("type")
+
+    # --- type check -------------------------------------------------------
+    if schema_type is not None:
+        type_ok = False
+        if schema_type == "object":
+            type_ok = isinstance(value, dict)
+        elif schema_type == "array":
+            type_ok = isinstance(value, (list, tuple))
+        elif schema_type == "string":
+            type_ok = isinstance(value, str)
+        elif schema_type == "number":
+            type_ok = isinstance(value, (int, float)) and not isinstance(
+                value, bool
+            )
+        elif schema_type == "integer":
+            type_ok = isinstance(value, int) and not isinstance(value, bool)
+        elif schema_type == "boolean":
+            type_ok = isinstance(value, bool)
+        elif schema_type == "null":
+            type_ok = value is None
+
+        if not type_ok:
+            errors.append(f"{path}: must be {schema_type}")
+            return errors  # further checks require correct type
+
+    # --- enum -------------------------------------------------------------
+    enum_values = schema.get("enum")
+    if enum_values is not None and value not in enum_values:
+        errors.append(f"{path}: must be one of {enum_values}")
+
+    # --- object-specific checks -------------------------------------------
+    if schema_type == "object" and isinstance(value, dict):
+        properties = schema.get("properties", {})
+        allowed = set(properties.keys())
+
+        for prop_name in schema.get("required", []):
+            if prop_name not in value:
+                errors.append(f"{path}/{prop_name}: is required")
+
+        for prop_name, prop_schema in properties.items():
+            if prop_name in value:
+                child_path = f"{path}/{prop_name}"
+                errors.extend(
+                    _validate_against_schema(
+                        value[prop_name], prop_schema, child_path
+                    )
+                )
+
+        if schema.get("additionalProperties") is False:
+            for key in value:
+                if key not in allowed:
+                    errors.append(f"{path}/{key}: unexpected property")
+
+    # --- array-specific checks --------------------------------------------
+    if schema_type == "array" and isinstance(value, (list, tuple)):
+        items_schema = schema.get("items")
+        if items_schema is not None:
+            for i, item in enumerate(value):
+                child_path = f"{path}/{i}"
+                errors.extend(
+                    _validate_against_schema(item, items_schema, child_path)
+                )
+
+    # --- string-specific checks -------------------------------------------
+    if isinstance(value, str):
+        min_len = schema.get("minLength")
+        if min_len is not None and len(value) < min_len:
+            errors.append(f"{path}: length must be >= {min_len}")
+
+        max_len = schema.get("maxLength")
+        if max_len is not None and len(value) > max_len:
+            errors.append(f"{path}: length must be <= {max_len}")
+
+        pattern = schema.get("pattern")
+        if pattern is not None:
+            if not re.match(pattern, value):
+                errors.append(f"{path}: must match pattern {pattern!r}")
+
+    # --- number / integer checks ------------------------------------------
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        min_val = schema.get("minimum")
+        if min_val is not None and value < min_val:
+            errors.append(f"{path}: must be >= {min_val}")
+
+        max_val = schema.get("maximum")
+        if max_val is not None and value > max_val:
+            errors.append(f"{path}: must be <= {max_val}")
+
+    return errors
+
+
+def constrained_tool(
+    output_schema: dict[str, Any],
+    *,
+    name: str | None = None,
+    description: str = "",
+    input_schema: dict[str, Any] | None = None,
+) -> Callable:
+    """Register an async function as an ACP/MCP tool with output validation.
+
+    Works like @tool but validates the function's return value against
+    *output_schema* after every invocation. If validation fails the result
+    is turned into an MCP ``isError`` result (via
+    :class:`StructuredOutputValidationError`).
+
+    Parameters
+    ----------
+    output_schema:
+        JSON Schema dict describing the expected return value.
+    name:
+        Tool name exposed to the agent. Defaults to the function name.
+    description:
+        Human-readable description of what the tool does.
+    input_schema:
+        JSON Schema dict describing the tool's input parameters.
+    """
+
+    def decorator(fn: Callable) -> Callable:
+        tool_name = name or fn.__name__
+        schema_json = (
+            json.dumps(input_schema)
+            if input_schema is not None
+            else _infer_schema(fn)
+        )
+        definition = ToolDefinition(
+            name=tool_name,
+            description=description or inspect.getdoc(fn) or "",
+            input_schema=schema_json,
+        )
+        _pending_registrations.append((definition, fn))
+
+        @functools.wraps(fn)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            output = await fn(*args, **kwargs)
+            if output is None:
+                output = {}
+            errs = _validate_against_schema(output, output_schema)
+            if errs:
+                raise StructuredOutputValidationError(errs)
+            return output
+
+        wrapper._tool_definition = definition  # type: ignore[attr-defined]
+        wrapper._output_schema = output_schema  # type: ignore[attr-defined]
         return wrapper
 
     return decorator
