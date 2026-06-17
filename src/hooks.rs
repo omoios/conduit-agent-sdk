@@ -28,6 +28,20 @@ pub enum HookType {
     Connected,
     /// When the client disconnects from the agent.
     Disconnected,
+    /// When the user submits a prompt.
+    UserPromptSubmit,
+    /// When the agent signals stop / end of turn.
+    Stop,
+    /// When a subagent starts.
+    SubagentStart,
+    /// When a subagent stops.
+    SubagentStop,
+    /// When permission is requested from the user.
+    PermissionRequest,
+    /// System notification event.
+    Notification,
+    /// Before a conversation compact operation.
+    PreCompact,
 }
 
 /// A registered hook with its Python callback.

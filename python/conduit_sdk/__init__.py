@@ -55,7 +55,7 @@ from conduit_sdk.exceptions import (
     ToolError,
     TransportError,
 )
-from conduit_sdk.hooks import HookRunner, HookType, hook
+from conduit_sdk.hooks import HookRunner, HookType, RegisteredHook, hook
 from conduit_sdk.options import AgentOptions
 from conduit_sdk.permissions import (
     PermissionResult,
@@ -177,6 +177,7 @@ __all__ = [
     "hook",
     "HookRunner",
     "HookType",
+    "RegisteredHook",
     # Proxy
     "Proxy",
     "ProxyChain",
