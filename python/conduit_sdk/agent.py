@@ -32,6 +32,8 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import urllib.error
+import urllib.request
 import uuid
 from typing import Any, Awaitable, Callable
 
@@ -66,9 +68,11 @@ class AgentContext:
         self,
         session_id: str,
         write: Callable[[dict[str, Any]], Awaitable[None]],
+        mcp_servers: list[dict[str, Any]] | None = None,
     ) -> None:
         self.session_id = session_id
         self._write = write
+        self.mcp_servers = mcp_servers or []
 
     async def send_text(self, text: str) -> None:
         """Stream an ``agent_message_chunk`` with a text block."""
@@ -102,6 +106,32 @@ class AgentContext:
             }
         )
 
+    async def call_tool(
+        self,
+        server_name: str,
+        tool_name: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Call a tool on an ``http`` MCP server the client provided at
+        ``session/new``. Returns the MCP ``tools/call`` result dict
+        (``{"content": [...], "isError": bool}``).
+        """
+        server = next(
+            (s for s in self.mcp_servers if s.get("name") == server_name), None
+        )
+        if server is None:
+            raise KeyError(
+                f"MCP server {server_name!r} was not provided to this session"
+            )
+        if server.get("type") != "http" or not server.get("url"):
+            raise ValueError(
+                f"MCP server {server_name!r} is not an http server"
+            )
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, _mcp_call, server["url"], tool_name, arguments or {}
+        )
+
 
 class AgentServer:
     """An ACP agent server that speaks the protocol over stdio.
@@ -118,6 +148,7 @@ class AgentServer:
         self.name = name
         self.version = version
         self._handlers: dict[str, Callable[..., Any]] = {}
+        self._session_mcp: dict[str, list[dict[str, Any]]] = {}
 
     # -- Handler registration ---------------------------------------------
 
@@ -275,9 +306,14 @@ class AgentServer:
             if isinstance(value, dict):
                 if "sessionId" not in value:
                     raise ValueError("on_new_session must return a session id")
-                return value
-            return {"sessionId": str(value)}
-        return {"sessionId": uuid.uuid4().hex}
+                result = value
+            else:
+                result = {"sessionId": str(value)}
+        else:
+            result = {"sessionId": uuid.uuid4().hex}
+        # Capture MCP servers the client provided so on_prompt can call tools.
+        self._session_mcp[result["sessionId"]] = params.get("mcpServers") or []
+        return result
 
     async def _do_session_load(self, params: dict[str, Any]) -> dict[str, Any]:
         handler = self._handlers.get(_SESSION_LOAD)
@@ -296,7 +332,7 @@ class AgentServer:
             return {"stopReason": "refusal"}
         session_id = str(params.get("sessionId", ""))
         content = params.get("prompt", []) or []
-        ctx = AgentContext(session_id, write)
+        ctx = AgentContext(session_id, write, self._session_mcp.get(session_id, []))
         stop = await _maybe_await(handler(ctx, session_id, content))
         if stop is None:
             stop = "end_turn"
@@ -311,3 +347,23 @@ async def _maybe_await(value: Any) -> Any:
     if asyncio.iscoroutine(value):
         return await value
     return value
+
+
+def _mcp_call(url: str, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Blocking MCP ``tools/call`` over HTTP (run in an executor)."""
+    payload = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": tool_name, "arguments": arguments},
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(  # noqa: S310 - agent calls a localhost SDK server
+        url, data=payload, headers={"Content-Type": "application/json"}, method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+        body = json.loads(resp.read())
+    if "error" in body:
+        raise RuntimeError(f"MCP tools/call error: {body['error']}")
+    return body["result"]

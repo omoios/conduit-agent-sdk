@@ -1262,11 +1262,20 @@ async fn acp_task(
 
                 // Apply MCP servers if provided.
                 if let Some(ref servers_str) = mcp_servers_json {
-                    // McpServer implements Deserialize via serde, try direct deser
-                    if let Ok(servers) =
-                        serde_json::from_str::<Vec<agent_client_protocol::schema::McpServer>>(servers_str)
-                    {
-                        req = req.mcp_servers(servers);
+                    // McpServer is an internally-tagged enum (tag = "type");
+                    // surface parse failures instead of silently dropping the
+                    // server list, which would hide SDK tools from the agent.
+                    match serde_json::from_str::<Vec<agent_client_protocol::schema::McpServer>>(
+                        servers_str,
+                    ) {
+                        Ok(servers) => {
+                            req = req.mcp_servers(servers);
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "conduit-sdk: ignoring mcp_servers (parse failed; SDK tools will NOT be exposed): {e}"
+                            );
+                        }
                     }
                 }
 

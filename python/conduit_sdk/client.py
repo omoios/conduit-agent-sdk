@@ -91,6 +91,7 @@ class Client:
         self._hooks = HookRunner()
         self._query: Query | None = None
         self._sdk_mcp_servers: list = []  # started McpSdkServerConfig instances
+        self._default_session_id: str | None = None
 
     # -- Factory methods -----------------------------------------------------
 
@@ -241,6 +242,22 @@ class Client:
 
     # -- Prompting -----------------------------------------------------------
 
+    async def _ensure_default_session(self) -> str:
+        """Create the default session (carrying mcp_servers) on first use.
+
+        The Rust core auto-creates a session without MCP servers; creating it
+        here ensures SDK tools are passed to the agent on the common path.
+        """
+        if self._default_session_id is not None:
+            return self._default_session_id
+        cwd = self._options.cwd if self._options else None
+        meta_json = self._options.to_meta_json() if self._options else None
+        mcp_servers_json = self._options.to_mcp_servers_json() if self._options else None
+        self._default_session_id = await self._rust_client.new_session(
+            cwd, meta_json, mcp_servers_json
+        )
+        return self._default_session_id
+
     async def prompt(
         self,
         text: str | list,
@@ -260,7 +277,8 @@ class Client:
         """
         if not self._connected:
             raise ConnectionError("client is not connected \u2014 call connect() first")
-
+        if session_id is None:
+            session_id = await self._ensure_default_session()
         text_str, content_json = self._prepare_prompt(text)
         messages = await self._rust_client.prompt(text_str, session_id, content_json)
         for msg in messages:
@@ -283,16 +301,17 @@ class Client:
         """
         if not self._connected:
             raise ConnectionError("client is not connected \u2014 call connect() first")
-
+        if session_id is None:
+            session_id = await self._ensure_default_session()
         text_str, content_json = self._prepare_prompt(text)
-        await self._rust_client.send_prompt(text_str, session_id, content_json)
         store = self._options.session_store if self._options else None
+        await self._rust_client.send_prompt(text_str, session_id, content_json)
         while True:
             update = await self._rust_client.recv_update()
             if update is None:
                 break
             yield update
-            if store is not None and session_id is not None:
+            if store is not None:
                 await store.append_update(session_id, self._record_update(update))
 
     async def prompt_sync(

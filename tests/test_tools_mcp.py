@@ -157,7 +157,7 @@ async def test_http_serve_tools_list_and_call():
     server = create_sdk_mcp_server("math", tools=[add])
     url = await server.start()
     try:
-        assert server.acp_config() == {"type": "http", "name": "math", "url": url}
+        assert server.acp_config() == {"type": "http", "name": "math", "url": url, "headers": []}
 
         loop = asyncio.get_running_loop()
         listed = await loop.run_in_executor(

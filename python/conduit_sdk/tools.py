@@ -389,7 +389,7 @@ class McpSdkServerConfig:
         """
         if self._url is None:
             raise ToolError("SDK MCP server not started; call start() or pass it to AgentOptions.mcp_servers")
-        return {"type": "http", "name": self.name, "url": self._url}
+        return {"type": "http", "name": self.name, "url": self._url, "headers": []}
 
     async def _handle_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -397,7 +397,7 @@ class McpSdkServerConfig:
         try:
             await self._serve_one(reader, writer)
         except Exception:  # noqa: BLE001 - never let one bad conn kill the server
-            pass
+            pass  # noqa: BLE001 - never let one bad conn kill the server
         finally:
             try:
                 writer.close()
