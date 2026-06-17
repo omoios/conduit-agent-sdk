@@ -1,6 +1,6 @@
 //! Transport layer: manages byte-stream connections to agent subprocesses.
 //!
-//! Wraps sacp's `ByteStreams` and provides subprocess management for spawning
+//! Wraps the ACP `ByteStreams` transport and provides subprocess management for spawning
 //! ACP-compatible agents. The Python layer never touches transport directly;
 //! it goes through [`crate::client::RustClient`].
 

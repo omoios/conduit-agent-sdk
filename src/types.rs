@@ -24,7 +24,7 @@ pub struct Capabilities {
 
 impl Capabilities {
     /// Construct from ACP agent capabilities received during the initialize handshake.
-    pub fn from_acp(agent_caps: &sacp::schema::AgentCapabilities) -> Self {
+    pub fn from_acp(agent_caps: &agent_client_protocol::schema::AgentCapabilities) -> Self {
         Self {
             sessions: agent_caps.load_session,
             tools: true, // ACP agents always support basic tool use

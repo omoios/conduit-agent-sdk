@@ -17,7 +17,7 @@ use crate::types::{
     UpdateKind,
 };
 use pyo3::prelude::*;
-use sacp::schema::{
+use agent_client_protocol::schema::{
     AgentNotification, CancelNotification, ContentBlock as AcpContentBlock,
     Implementation, InitializeRequest, LoadSessionRequest, NewSessionRequest,
     PermissionOptionKind, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
@@ -25,7 +25,7 @@ use sacp::schema::{
     SessionNotification, SetSessionModeRequest,
     SessionUpdate as AcpSessionUpdate, ToolCallStatus,
 };
-use sacp::UntypedMessage;
+use agent_client_protocol::{Client, ConnectionTo, Agent, Responder, UntypedMessage};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Mutex};
@@ -213,7 +213,7 @@ impl RustClient {
             let child_stdin = process.take_stdin()?;
             let child_stdout = process.take_stdout()?;
             let transport =
-                sacp::ByteStreams::new(child_stdin.compat_write(), child_stdout.compat());
+                agent_client_protocol::ByteStreams::new(child_stdin.compat_write(), child_stdout.compat());
 
             // Channels: commands → background task, streaming events ← notification handler
             let (cmd_tx, cmd_rx) = mpsc::channel::<AcpCommand>(32);
@@ -230,11 +230,11 @@ impl RustClient {
             let perm_callback = perm_callback_for_connect;
 
             // Build the handler chain with a spawned client task.
-            let chain = sacp::JrHandlerChain::new()
+            let builder = Client.builder()
                 .name("conduit-sdk")
                 // --- Session update notifications (streaming chunks) ---
                 .on_receive_notification(
-                    async move |notification: SessionNotification, _cx| {
+                    async move |notification: SessionNotification, _cx: ConnectionTo<Agent>| {
                         match &notification.update {
                             AcpSessionUpdate::AgentMessageChunk(chunk) => {
                                 if let AcpContentBlock::Text(tc) = &chunk.content {
@@ -361,13 +361,14 @@ impl RustClient {
                         }
                         Ok(())
                     },
+                    agent_client_protocol::on_receive_notification!(),
                 )
                 // --- Extension notifications (rate_limit_event, etc.) ---
                 .on_receive_notification(
-                    async move |notification: AgentNotification, _cx| {
+                    async move |notification: AgentNotification, _cx: ConnectionTo<Agent>| {
                         if let AgentNotification::ExtNotification(ext) = notification {
                             let method = ext.method.to_string();
-                            let params_json = ext.params.to_string();
+                            let params_json = ext.params.get().to_string();
                             let _ = ext_notif_tx
                                 .send(StreamEvent::RateLimit {
                                     method,
@@ -377,10 +378,11 @@ impl RustClient {
                         }
                         Ok(())
                     },
+                    agent_client_protocol::on_receive_notification!(),
                 )
                 // --- Permission requests ---
                 .on_receive_request(
-                    async move |request: RequestPermissionRequest, request_cx| {
+                    async move |request: RequestPermissionRequest, responder: Responder<RequestPermissionResponse>, _cx: ConnectionTo<Agent>| {
                         // Try to call the Python permission callback.
                         let decision = call_permission_callback(
                             &perm_callback,
@@ -401,7 +403,7 @@ impl RustClient {
                                     .or_else(|| request.options.first());
 
                                 if let Some(opt) = allow_option {
-                                    request_cx.respond(RequestPermissionResponse::new(
+                                    responder.respond(RequestPermissionResponse::new(
                                         RequestPermissionOutcome::Selected(
                                             SelectedPermissionOutcome::new(
                                                 opt.option_id.clone(),
@@ -409,27 +411,30 @@ impl RustClient {
                                         ),
                                     ))
                                 } else {
-                                    request_cx.respond(RequestPermissionResponse::new(
+                                    responder.respond(RequestPermissionResponse::new(
                                         RequestPermissionOutcome::Cancelled,
                                     ))
                                 }
                             }
                             PermissionDecision::Deny => {
-                                request_cx.respond(RequestPermissionResponse::new(
+                                responder.respond(RequestPermissionResponse::new(
                                     RequestPermissionOutcome::Cancelled,
                                 ))
                             }
                         }
                     },
-                )
-                // --- Client logic (init handshake + command loop) ---
-                .with_spawned(move |cx| {
-                    acp_task(cx, caps_tx, cmd_rx, update_tx)
-                });
+                    agent_client_protocol::on_receive_request!(),
+                );
 
             // Spawn the long-lived background task that owns the ACP connection.
+            // connect_with runs the dispatch loop and the main_fn (acp_task: the
+            // init handshake + command loop) concurrently; the connection lives
+            // as long as acp_task runs and ends when it returns (on Shutdown).
             tokio::spawn(async move {
-                if let Err(e) = chain.serve(transport).await {
+                if let Err(e) = builder
+                    .connect_with(transport, move |cx| acp_task(cx, caps_tx, cmd_rx, update_tx))
+                    .await
+                {
                     eprintln!("conduit-sdk: ACP background task error: {e}");
                 }
             });
@@ -1197,13 +1202,13 @@ impl RustClient {
 /// to `connect()` via `caps_tx`, then enters a command loop that processes
 /// [`AcpCommand`] messages from the Python-facing API.
 async fn acp_task(
-    cx: sacp::JrConnectionCx,
+    cx: ConnectionTo<Agent>,
     caps_tx: oneshot::Sender<Result<(Capabilities, Option<String>), ConduitError>>,
     mut cmd_rx: mpsc::Receiver<AcpCommand>,
     update_tx: mpsc::Sender<StreamEvent>,
-) -> Result<(), sacp::schema::Error> {
+) -> Result<(), agent_client_protocol::Error> {
     // ---- Initialize handshake ----
-    let init_req = InitializeRequest::new(sacp::schema::ProtocolVersion::LATEST)
+    let init_req = InitializeRequest::new(agent_client_protocol::schema::ProtocolVersion::LATEST)
         .client_info(Implementation::new("conduit-agent-sdk", env!("CARGO_PKG_VERSION")));
 
     let init_result = cx
@@ -1259,7 +1264,7 @@ async fn acp_task(
                 if let Some(ref servers_str) = mcp_servers_json {
                     // McpServer implements Deserialize via serde, try direct deser
                     if let Ok(servers) =
-                        serde_json::from_str::<Vec<sacp::schema::McpServer>>(servers_str)
+                        serde_json::from_str::<Vec<agent_client_protocol::schema::McpServer>>(servers_str)
                     {
                         req = req.mcp_servers(servers);
                     }
@@ -1435,7 +1440,7 @@ async fn acp_task(
             } => {
                 // Build content blocks: use rich content JSON if provided,
                 // otherwise wrap the text string as a single Text block.
-                let content_blocks: Vec<sacp::schema::ContentBlock> = match content_json {
+                let content_blocks: Vec<agent_client_protocol::schema::ContentBlock> = match content_json {
                     Some(json_str) => {
                         serde_json::from_str(&json_str).unwrap_or_else(|_| vec![text.into()])
                     }

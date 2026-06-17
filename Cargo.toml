@@ -13,8 +13,7 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = { version = "0.24", features = ["abi3-py312"] }
 pyo3-async-runtimes = { version = "0.24", features = ["tokio-runtime"] }
-sacp = { git = "https://github.com/agentclientprotocol/rust-sdk", features = ["unstable"] }
-sacp-tokio = { git = "https://github.com/agentclientprotocol/rust-sdk" }
+agent-client-protocol = { version = "0.14", features = ["unstable"] }
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 serde = { version = "1", features = ["derive"] }

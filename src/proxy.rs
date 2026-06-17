@@ -2,7 +2,7 @@
 //!
 //! Proxies intercept and transform ACP messages between the client and
 //! agent. They use the `_proxy/successor/*` protocol mediated by a
-//! conductor (from sacp-conductor).
+//! conductor (agent-client-protocol-conductor).
 
 use crate::error::ConduitError;
 use pyo3::prelude::*;
@@ -115,7 +115,7 @@ impl RustProxyChain {
             if chain.is_empty() {
                 return Err(ConduitError::Proxy("proxy chain is empty".into()).into());
             }
-            // TODO: Use sacp-conductor to spawn and connect the proxy chain.
+            // TODO: Use agent-client-protocol-conductor to spawn and connect the proxy chain.
             // Each proxy is started as a subprocess, connected via ByteStreams,
             // and the conductor routes messages using _proxy/successor/* protocol.
             Ok(())

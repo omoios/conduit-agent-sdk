@@ -18,8 +18,8 @@ Repository: https://github.com/omoios/conduit-agent-sdk
 │  ACP client, transport, streaming,     │
 │  permission dispatch, hook dispatch     │
 ├─────────────────────────────────────────┤
-│          sacp / sacp-tokio              │  ← ACP protocol implementation
-│  ByteStreams, JrHandlerChain, types     │
+│   agent-client-protocol / -schema       │  ← ACP protocol implementation
+│  ByteStreams, Client builder, types     │
 └─────────────────────────────────────────┘
 ```
 
