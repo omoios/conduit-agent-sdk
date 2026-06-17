@@ -87,6 +87,10 @@ enum AcpCommand {
         content_json: Option<String>,
         reply: oneshot::Sender<Result<(), ConduitError>>,
     },
+    DeleteSession {
+        session_id: String,
+        reply: oneshot::Sender<Result<String, ConduitError>>,
+    },
     Shutdown,
 }
 
@@ -700,6 +704,39 @@ impl RustClient {
                 .map_err(|_| ConduitError::Connection("background task closed".into()))?;
 
             Ok(())
+        })
+    }
+
+    /// Delete a session from the agent's session list.
+    fn delete_session<'py>(
+        &self,
+        py: Python<'py>,
+        session_id: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let cmd_tx = {
+                let guard = inner.lock().await;
+                let client = guard
+                    .as_ref()
+                    .ok_or_else(|| ConduitError::Connection("client not connected".into()))?;
+                client.cmd_tx.clone()
+            };
+
+            let (reply_tx, reply_rx) = oneshot::channel();
+            cmd_tx
+                .send(AcpCommand::DeleteSession {
+                    session_id,
+                    reply: reply_tx,
+                })
+                .await
+                .map_err(|_| ConduitError::Connection("background task closed".into()))?;
+
+            reply_rx
+                .await
+                .map_err(|_| ConduitError::Connection("delete session reply dropped".into()))?
+                .map_err(Into::into)
         })
     }
 
@@ -1455,6 +1492,29 @@ async fn acp_task(
                             Ok(val) => {
                                 let json = serde_json::to_string(&val)
                                     .unwrap_or_else(|_| "[]".into());
+                                let _ = reply.send(Ok(json));
+                            }
+                            Err(e) => {
+                                let _ = reply.send(Err(ConduitError::Protocol(e.to_string())));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        let _ = reply.send(Err(ConduitError::Protocol(e.to_string())));
+                    }
+                }
+            }
+            AcpCommand::DeleteSession { session_id, reply } => {
+                let params = serde_json::json!({
+                    "session_id": session_id,
+                });
+                match UntypedMessage::new("session/delete", &params) {
+                    Ok(msg) => {
+                        let result = cx.send_request(msg).block_task().await;
+                        match result {
+                            Ok(val) => {
+                                let json = serde_json::to_string(&val)
+                                    .unwrap_or_else(|_| "{}".into());
                                 let _ = reply.send(Ok(json));
                             }
                             Err(e) => {

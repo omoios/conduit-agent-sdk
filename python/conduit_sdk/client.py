@@ -473,6 +473,16 @@ class Client:
         """Cancel a running prompt in the given session (ACP CancelNotification)."""
         await self._rust_client.cancel_session(session_id)
 
+
+    async def delete_session(self, session_id: str) -> dict:
+        """Delete a session from the agent's session list.
+
+        Returns the result as a dict (typically empty on success).
+        """
+        import json
+        result_json = await self._rust_client.delete_session(session_id)
+        return json.loads(result_json)
+
     async def set_config(self, session_id: str, config_id: str, value: str) -> dict:
         """Set a config option on a session. Returns the response as a dict."""
         import json

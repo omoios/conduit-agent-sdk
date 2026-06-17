@@ -47,6 +47,7 @@ _SESSION_PROMPT = "session/prompt"
 _SESSION_CANCEL = "session/cancel"
 _SESSION_UPDATE = "session/update"
 _ELICITATION_CREATE = "elicitation/create"
+_SESSION_DELETE = "session/delete"
 
 _STOP_REASONS = {
     "end_turn",
@@ -244,6 +245,16 @@ class AgentServer:
         self._handlers[_SESSION_CANCEL] = fn
         return fn
 
+    def on_session_delete(self, fn: Callable[..., Any]) -> Callable[..., Any]:
+        """Handle ``session/delete`` \u2014 called when the client deletes a session.
+
+        ``async def fn(params: dict) -> dict`` returning the result dict
+        (typically empty on success). If no handler is registered, the default
+        implementation returns an empty ``{}`` result.
+        """
+        self._handlers[_SESSION_DELETE] = fn
+        return fn
+
     # -- Lifecycle --------------------------------------------------------
 
     def run(self) -> None:
@@ -316,6 +327,13 @@ class AgentServer:
                 if handler is not None:
                     await _maybe_await(handler(params))
                 # notification: no response
+            elif method == _SESSION_DELETE:
+                handler = self._handlers.get(_SESSION_DELETE)
+                if handler is not None:
+                    result = await _maybe_await(handler(params))
+                else:
+                    result = {}
+                await self._respond(req_id, result, write)
             else:
                 if req_id is not None:
                     await write(
