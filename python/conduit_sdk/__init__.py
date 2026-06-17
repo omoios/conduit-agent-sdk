@@ -80,6 +80,14 @@ from conduit_sdk.redaction import (
     redact_events,
     redact_patterns,
 )
+from conduit_sdk.toolview import (
+    ToolCall,
+    TurnResult,
+    collect_tool_calls,
+    observe_turn,
+    parse_tool_input,
+    tool_output_text,
+)
 from conduit_sdk.elicitation import (
     ElicitationAction,
     ElicitationMode,
@@ -222,6 +230,13 @@ __all__ = [
     "redact_events",
     "redact_patterns",
     "DEFAULT_SECRET_PATTERNS",
+    # Tool-call observability (see agent file/terminal tool outputs)
+    "ToolCall",
+    "TurnResult",
+    "observe_turn",
+    "collect_tool_calls",
+    "tool_output_text",
+    "parse_tool_input",
     # Types — original
     "Capabilities",
     "ClientConfig",
