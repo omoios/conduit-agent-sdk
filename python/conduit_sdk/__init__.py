@@ -74,6 +74,7 @@ from conduit_sdk.query import Query
 query = _query_func  # noqa: F811
 from conduit_sdk.registry import AgentInfo, Registry
 from conduit_sdk.session import Session
+from conduit_sdk.agent import AgentContext, AgentServer
 from conduit_sdk.tools import (
     McpSdkServerConfig,
     create_mcp_server,
@@ -118,6 +119,8 @@ __all__ = [
     "Client",
     "Session",
     "Query",
+    "AgentServer",
+    "AgentContext",
     # Registry & activation
     "query",
     "Registry",

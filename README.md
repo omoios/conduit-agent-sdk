@@ -70,6 +70,33 @@ async with Client(["claude", "--agent"]) as client:
         print(message.text())
 ```
 
+## Authoring an Agent
+
+`conduit_sdk` is bidirectional: as well as *driving* agents as a client, you can
+*author* an agent in Python that any ACP client can spawn. Register async
+handlers on an `AgentServer`, then call `run()` — it speaks ACP over stdio.
+
+```python
+from conduit_sdk import AgentServer
+
+server = AgentServer(name="my-agent")
+
+@server.on_prompt
+async def answer(ctx, session_id, content):
+    text = "".join(b.get("text", "") for b in content if isinstance(b, dict))
+    await ctx.send_text(f"You said: {text}")   # streamed as agent_message_chunk
+    return "end_turn"                           # stop reason
+
+if __name__ == "__main__":
+    server.run()
+```
+
+`on_new_session`, `on_initialize`, `on_session_load`, and `on_cancel` are
+optional (sensible defaults are provided). Inside `on_prompt`, stream output via
+`ctx.send_text(...)` / `ctx.send_thought(...)` / `ctx.send_update(dict)` and
+return the turn's `stop_reason`. The agent is driven by clients over the same
+wire protocol, so it loops back with this SDK's own `Client`.
+
 ## Agent Registry
 
 The SDK integrates with the [ACP agent registry](https://agentclientprotocol.com/get-started/registry), which provides a catalog of available agents with distribution metadata.
