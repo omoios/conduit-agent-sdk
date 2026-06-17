@@ -30,3 +30,7 @@ Thumbs.db
 
 # Maturin
 *.whl
+
+# Local agent/harness state
+.claude/settings.local.json
+.omp/runs/
