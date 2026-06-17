@@ -19,6 +19,8 @@ With options::
 
 from __future__ import annotations
 
+import json
+
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -88,7 +90,7 @@ class Client:
         self._connected = False
         self._hooks = HookRunner()
         self._query: Query | None = None
-        self._protocol: RustControlProtocol | None = None
+        self._sdk_mcp_servers: list = []  # started McpSdkServerConfig instances
 
     # -- Factory methods -----------------------------------------------------
 
@@ -162,6 +164,8 @@ class Client:
                 can_use_tool=self._options.can_use_tool,
             )
 
+        # Start any in-process SDK MCP servers so the agent can reach them.
+        await self._start_sdk_mcp_servers()
         return self._capabilities
 
     async def disconnect(self) -> None:
@@ -172,6 +176,23 @@ class Client:
         if self._connected:
             await self._rust_client.disconnect()
             self._connected = False
+        await self._stop_sdk_mcp_servers()
+
+    async def _start_sdk_mcp_servers(self) -> None:
+        """Start in-process MCP servers from SDK tools so agents can call them."""
+        if not self._options or not self._options.mcp_servers:
+            return
+        from conduit_sdk.tools import McpSdkServerConfig
+
+        for cfg in self._options.mcp_servers.values():
+            if isinstance(cfg, McpSdkServerConfig) and cfg.url is None:
+                await cfg.start()
+                self._sdk_mcp_servers.append(cfg)
+
+    async def _stop_sdk_mcp_servers(self) -> None:
+        for cfg in self._sdk_mcp_servers:
+            await cfg.stop()
+        self._sdk_mcp_servers.clear()
 
     @property
     def connected(self) -> bool:
@@ -265,17 +286,43 @@ class Client:
 
         text_str, content_json = self._prepare_prompt(text)
         await self._rust_client.send_prompt(text_str, session_id, content_json)
+        store = self._options.session_store if self._options else None
         while True:
             update = await self._rust_client.recv_update()
             if update is None:
                 break
             yield update
+            if store is not None and session_id is not None:
+                await store.append_update(session_id, self._record_update(update))
 
     async def prompt_sync(
         self, text: str | list, *, session_id: str | None = None
     ) -> list[Message]:
         """Send a prompt and collect all response messages (non-streaming)."""
         return [msg async for msg in self.prompt(text, session_id=session_id)]
+
+    @staticmethod
+    def _record_update(update: SessionUpdate) -> dict[str, Any]:
+        """Serialize a streaming ``SessionUpdate`` into a JSON-safe store record."""
+        record: dict[str, Any] = {"kind": str(update.kind)}
+        for attr in (
+            "text", "tool_name", "tool_use_id", "tool_kind",
+            "tool_status", "tool_input", "stop_reason", "mode_id",
+        ):
+            value = getattr(update, attr, None)
+            if value is not None:
+                record[attr] = value if isinstance(value, (str, int, float, bool)) else str(value)
+        for attr in (
+            "commands_json", "config_json", "plan_json", "usage_json",
+            "rate_limit_json", "session_info_json",
+        ):
+            value = getattr(update, attr, None)
+            if value:
+                try:
+                    record[attr] = json.loads(value)
+                except (TypeError, ValueError):
+                    record[attr] = value
+        return record
 
     # -- Skill activation ---------------------------------------------------
 

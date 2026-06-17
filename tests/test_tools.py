@@ -12,7 +12,6 @@ from conduit_sdk.tools import (
     McpSdkServerConfig,
     _infer_schema,
     create_sdk_mcp_server,
-    handle_mcp_request,
 )
 
 
@@ -165,101 +164,3 @@ class TestCreateSdkMcpServer:
             "versioned", version="3.0.0", tools=[ver_test_sdk]
         )
         assert server.version == "3.0.0"
-
-
-class TestHandleMcpRequest:
-    @pytest.mark.asyncio
-    async def test_tools_list(self):
-        @tool(description="List files")
-        async def ls_sdk(path: str) -> str:
-            return "file1\nfile2"
-
-        server = McpSdkServerConfig(name="fs", tools=[ls_sdk])
-        servers = {"fs": server}
-
-        result = await handle_mcp_request(
-            servers,
-            {"method": "tools/list", "server": "fs"},
-        )
-        assert "tools" in result
-        assert len(result["tools"]) == 1
-        assert result["tools"][0]["name"] == "ls_sdk"
-
-    @pytest.mark.asyncio
-    async def test_tools_list_all_servers(self):
-        @tool(description="Tool A")
-        async def tool_a_sdk() -> str:
-            return "a"
-
-        @tool(description="Tool B")
-        async def tool_b_sdk() -> str:
-            return "b"
-
-        servers = {
-            "s1": McpSdkServerConfig(name="s1", tools=[tool_a_sdk]),
-            "s2": McpSdkServerConfig(name="s2", tools=[tool_b_sdk]),
-        }
-
-        result = await handle_mcp_request(
-            servers,
-            {"method": "tools/list"},
-        )
-        assert len(result["tools"]) == 2
-
-    @pytest.mark.asyncio
-    async def test_tools_call_success(self):
-        @tool(description="Double a number")
-        async def double_sdk(x: int) -> int:
-            return x * 2
-
-        server = McpSdkServerConfig(name="math", tools=[double_sdk])
-        servers = {"math": server}
-
-        result = await handle_mcp_request(
-            servers,
-            {
-                "method": "tools/call",
-                "server": "math",
-                "params": {"name": "double_sdk", "arguments": {"x": 5}},
-            },
-        )
-        assert "content" in result
-        assert result["content"][0]["text"] == "10"
-
-    @pytest.mark.asyncio
-    async def test_tools_call_not_found(self):
-        servers: dict[str, McpSdkServerConfig] = {}
-        result = await handle_mcp_request(
-            servers,
-            {
-                "method": "tools/call",
-                "params": {"name": "missing", "arguments": {}},
-            },
-        )
-        assert "error" in result
-        assert "not found" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_tools_call_error(self):
-        @tool(description="Always fails")
-        async def fail_sdk() -> str:
-            raise ValueError("intentional error")
-
-        server = McpSdkServerConfig(name="bad", tools=[fail_sdk])
-        servers = {"bad": server}
-
-        result = await handle_mcp_request(
-            servers,
-            {
-                "method": "tools/call",
-                "server": "bad",
-                "params": {"name": "fail_sdk", "arguments": {}},
-            },
-        )
-        assert result.get("isError") is True
-        assert "intentional error" in result["error"]
-
-    @pytest.mark.asyncio
-    async def test_unknown_method(self):
-        result = await handle_mcp_request({}, {"method": "unknown/method"})
-        assert "error" in result

@@ -81,6 +81,13 @@ from conduit_sdk.tools import (
     create_sdk_mcp_server,
     tool,
 )
+from conduit_sdk.session_store import (
+    FileSessionStore,
+    InMemorySessionStore,
+    RedisSessionStore,
+    SessionStore,
+    SqlSessionStore,
+)
 from conduit_sdk.types import (
     Agent,
     AudioBlock,
@@ -121,6 +128,12 @@ __all__ = [
     "Query",
     "AgentServer",
     "AgentContext",
+    # Session persistence
+    "SessionStore",
+    "InMemorySessionStore",
+    "FileSessionStore",
+    "SqlSessionStore",
+    "RedisSessionStore",
     # Registry & activation
     "query",
     "Registry",

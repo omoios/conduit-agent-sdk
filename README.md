@@ -97,6 +97,62 @@ optional (sensible defaults are provided). Inside `on_prompt`, stream output via
 return the turn's `stop_reason`. The agent is driven by clients over the same
 wire protocol, so it loops back with this SDK's own `Client`.
 
+## Custom Tools (MCP)
+
+Give the agent extra tools defined in your own Python. The SDK runs an
+in-process MCP server for them and passes it to the agent as an `http` MCP
+server at session creation, so any agent that supports HTTP MCP (Claude Code,
+Codex, ...) can discover and call them.
+
+```python
+from conduit_sdk import AgentOptions, Client, create_sdk_mcp_server, tool
+
+@tool(description="Add two integers")
+async def add(a: int, b: int) -> int:
+    return a + b
+
+server = create_sdk_mcp_server("math", tools=[add])
+options = AgentOptions(mcp_servers={"math": server})
+
+async with Client(["claude", "--agent"], options=options) as client:
+    async for message in client.prompt("What is 2+2?"):
+        print(message.text())
+```
+
+Input JSON Schema is generated from the function's type hints (`Optional[X]`,
+`list[X]`, defaults, `Annotated[T, "desc"]`); pass `input_schema=` to override.
+
+## Session Persistence
+
+A `SessionStore` durably records each session's stream of `session/update`
+events plus metadata, enabling replay and cross-process sharing. Backends share
+one async interface: `InMemorySessionStore`, `FileSessionStore`,
+`SqlSessionStore` (SQLAlchemy async — SQLite for tests, Postgres via `asyncpg`
+in production), and `RedisSessionStore`.
+
+```python
+from conduit_sdk import AgentOptions, Client, FileSessionStore
+
+store = FileSessionStore("./sessions")
+options = AgentOptions(session_store=store)
+
+async with Client(["claude", "--agent"], options=options) as client:
+    async for update in client.prompt_stream("hello", session_id="s1"):
+        ...           # each update is appended to the store under "s1"
+
+events = await store.load_updates("s1")   # replay the session later
+```
+
+For SQL, point one store at any dialect — SQLite for tests, Postgres in prod:
+
+```python
+from sqlalchemy.ext.asyncio import create_async_engine
+from conduit_sdk import SqlSessionStore
+
+SqlSessionStore(create_async_engine("sqlite+aiosqlite:///:memory:"))   # tests
+SqlSessionStore(create_async_engine("postgresql+asyncpg://user:pw@host/db"))  # prod
+```
+
 ## Agent Registry
 
 The SDK integrates with the [ACP agent registry](https://agentclientprotocol.com/get-started/registry), which provides a catalog of available agents with distribution metadata.

@@ -28,7 +28,18 @@ Repository = "https://github.com/omoios/conduit-agent-sdk"
 Issues = "https://github.com/omoios/conduit-agent-sdk/issues"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.9"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.9",
+    "sqlalchemy>=2.0",
+    "greenlet>=3.0",
+    "aiosqlite>=0.20",
+    "asyncpg>=0.29",
+    "redis>=5.0",
+]
+sql = ["sqlalchemy>=2.0", "greenlet>=3.0", "aiosqlite>=0.20", "asyncpg>=0.29"]
+redis = ["redis>=5.0"]
 
 [build-system]
 requires = ["maturin>=1.0,<2.0"]

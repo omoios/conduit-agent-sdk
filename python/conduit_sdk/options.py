@@ -8,7 +8,9 @@ mode, tool allowlists, and MCP server configs.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
+if TYPE_CHECKING:
+    from conduit_sdk.session_store import SessionStore
 
 
 @dataclass
@@ -62,6 +64,7 @@ class AgentOptions:
     env: dict[str, str] = field(default_factory=dict)
     include_partial_messages: bool = False
     hooks: dict | None = None
+    session_store: SessionStore | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize non-None fields to a dict for the control protocol."""
@@ -112,16 +115,23 @@ class AgentOptions:
         return json.dumps(meta) if meta else None
 
     def to_mcp_servers_json(self) -> str | None:
-        """Serialize MCP server configs as JSON for NewSession."""
+        """Serialize MCP server configs as JSON for NewSession.
+
+        Started :class:`~conduit_sdk.tools.McpSdkServerConfig` instances emit
+        an ACP ``http`` config (``{type, name, url}``); other entries are
+        passed through as-is.
+        """
         import json
         if not self.mcp_servers:
             return None
         servers = []
         for name, cfg in self.mcp_servers.items():
-            if hasattr(cfg, "to_dict"):
+            if hasattr(cfg, "acp_config") and getattr(cfg, "url", None):
+                servers.append(cfg.acp_config())
+            elif hasattr(cfg, "to_dict"):
                 srv = cfg.to_dict()
+                srv.setdefault("name", name)
+                servers.append(srv)
             else:
-                srv = dict(cfg)
-            srv["name"] = name
-            servers.append(srv)
+                servers.append(dict(cfg))
         return json.dumps(servers)
