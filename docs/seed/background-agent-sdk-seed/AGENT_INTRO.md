@@ -41,16 +41,21 @@ The lower layers the seed assumes are **already built and tested** here:
 
 | Seed concept | conduit-agent-sdk status |
 |---|---|
-| ACP transport / client | \u2705 Rust core on `agent-client-protocol` 0.14 (`Client`, `prompt`, streaming, permissions, rich content) |
-| ACP agent/server side | \u2705 `AgentServer` (author agents in Python; client<->agent loopback verified) |
-| Adapters: `acp` | \u2705 (the `Client` IS the ACP adapter) |
-| Adapters: `conductor` / proxy chains | \u25cb scaffolded (`RustProxyChain`), **not implemented** \u2014 the seed\u2019s `proxy.*` (policy/redaction/eventNormalizer/diffReview) maps here |
-| Tools / MCP | \u2705 `@tool` + in-process `McpSdkServerConfig` (HTTP); agent calls SDK tools over MCP (loopback verified) |
-| Session persistence / replay | \u2705 `SessionStore` (InMemory/File/SQL/Redis) |
-| Policy | \u25cb partial (`AgentOptions`, permission callbacks, `permission_mode`); not the seed\u2019s structured `policy.*` |
-| Normalized events | \u2705 raw ACP `session/update` stream; \u274c **not** normalized to the seed\u2019s `AgentEvent` envelope |
-| Run / Runner / Result / evidence | \u274c not yet \u2014 this is the main thing the seed asks you to add |
-| Sandbox / approvals / diff / tests / PR | \u274c not yet |
+| ACP transport / client | ✅ Rust core on `agent-client-protocol` 0.14 (`Client`, `prompt`, streaming, permissions, rich content, session/delete) |
+| ACP agent/server side | ✅ `AgentServer` (author agents in Python; client↔agent loopback verified) |
+| Adapters: `acp` | ✅ the `Client` IS the ACP adapter; also wrapped by `runlayer.acp_adapter` |
+| Adapters: `mock` | ✅ `runlayer.mock_adapter` (deterministic; ships+tests first per seed principle 6) |
+| Adapters: `conductor` / proxy chains | 🟡 `conductor_command()` builds the `[conductor, "agent", ...proxies, base]` wrap; **live subprocess chaining needs the external `agent-client-protocol-conductor` binary** (not bundled) |
+| Tools / MCP | ✅ `@tool` + `@constrained_tool` (JSON-Schema output validation) + in-process `McpSdkServerConfig` (HTTP); agent calls SDK tools over MCP (loopback verified) |
+| Session persistence / replay | ✅ `SessionStore` (InMemory/File/SQL/Redis) with verified Postgres + Redis integration suites |
+| Elicitation (unstable) | ✅ `elicitation/create` client-handler routing + agent `request_elicitation`; loopback verified |
+| Hooks | ✅ matcher + priority + timeout + blocking; 15 Claude-SDK event types |
+| Redaction (proxy stage) | ✅ `redaction.redact_events` over the normalized event stream (`DEFAULT_SECRET_PATTERNS`) |
+| Policy | 🟡 partial (`AgentOptions`, permission callbacks, `permission_mode`, blocking hooks); NOT the seed's structured `policy.*` (`requireApprovalFor`/`deny`/budgets) |
+| Normalized events | ✅ `runlayer.AgentEvent` envelope (per `docs/EVENTS.md`); all 14 `UpdateKind` mapped |
+| Run / Runner / Result | ✅ `runlayer.Run` / `Runner` / `Result` (mock + acp adapters) |
+| Evidence: diffs / tests / artifacts / PR | ✗ not yet — `Result` carries status/summary/error but no captured evidence |
+| Sandbox / `approval.*` events / fakeProcess+opencode+pi adapters / cloud client | ✗ not yet |
 
 ## Your job (when you pick this up)
 
