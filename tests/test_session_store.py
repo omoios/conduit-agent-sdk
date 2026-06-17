@@ -1,8 +1,12 @@
 """Tests for conduit_sdk.session_store backends.
 
-Each backend is exercised through the same async contract via a parametrized
-fixture, so InMemory / File / Sql(SQLite) are guaranteed to behave identically.
-The Sql backend runs against an in-memory SQLite (aiosqlite) database.
+Each always-on backend (InMemory / File / Sql(SQLite)) is exercised through the
+shared async contract via a parametrized fixture, guaranteeing identical
+behavior. The Sql backend runs against an in-memory SQLite (aiosqlite) DB.
+
+The shared contract lives in :mod:`tests._session_store_contract` and is also
+run against Postgres and Redis — env-gated integration suites in
+``test_session_store_postgres`` and ``test_session_store_redis``.
 """
 from __future__ import annotations
 
@@ -16,6 +20,7 @@ from conduit_sdk.session_store import (
     InMemorySessionStore,
     SqlSessionStore,
 )
+from tests._session_store_contract import SessionStoreContract, _chunk
 
 BACKENDS = ["inmemory", "file", "sqlite"]
 
@@ -37,76 +42,8 @@ async def store(request, tmp_path):
     await s.close()
 
 
-def _chunk(text: str) -> dict:
-    return {
-        "sessionUpdate": "agent_message_chunk",
-        "content": {"type": "text", "text": text},
-    }
-
-
-@pytest.mark.asyncio
-async def test_append_load_preserves_order(store):
-    await store.append_update("s1", _chunk("a"))
-    await store.append_update("s1", _chunk("b"))
-    await store.append_update("s1", _chunk("c"))
-    out = await store.load_updates("s1")
-    assert [u["content"]["text"] for u in out] == ["a", "b", "c"]
-
-
-@pytest.mark.asyncio
-async def test_load_unknown_session_is_empty(store):
-    assert await store.load_updates("nope") == []
-
-
-@pytest.mark.asyncio
-async def test_metadata_set_get_and_merge(store):
-    await store.set_metadata("s1", {"title": "T", "cwd": "/tmp"})
-    meta = await store.get_metadata("s1")
-    assert meta is not None
-    assert meta["title"] == "T"
-
-    # Second set merges rather than replacing.
-    await store.set_metadata("s1", {"model": "gpt"})
-    meta = await store.get_metadata("s1")
-    assert meta["title"] == "T"
-    assert meta["model"] == "gpt"
-
-
-@pytest.mark.asyncio
-async def test_get_metadata_missing_is_none(store):
-    assert await store.get_metadata("missing") is None
-
-
-@pytest.mark.asyncio
-async def test_append_creates_session_for_listing(store):
-    await store.append_update("a", _chunk("x"))
-    await store.append_update("b", _chunk("y"))
-    sessions = set(await store.list_sessions())
-    assert {"a", "b"}.issubset(sessions)
-
-
-@pytest.mark.asyncio
-async def test_delete_removes_events_and_metadata(store):
-    await store.append_update("s1", _chunk("a"))
-    await store.set_metadata("s1", {"title": "T"})
-    await store.delete_session("s1")
-    assert await store.load_updates("s1") == []
-    assert await store.get_metadata("s1") is None
-
-
-@pytest.mark.asyncio
-async def test_delete_is_idempotent(store):
-    await store.delete_session("never-existed")
-    assert await store.list_sessions() == []
-
-
-@pytest.mark.asyncio
-async def test_isolated_sessions(store):
-    await store.append_update("s1", _chunk("one"))
-    await store.append_update("s2", _chunk("two"))
-    assert len(await store.load_updates("s1")) == 1
-    assert len(await store.load_updates("s2")) == 1
-    assert (await store.load_updates("s1"))[0]["content"]["text"] == "one"
+class TestCoreBackends(SessionStoreContract):
+    """In-memory, File, and SQLite all satisfy the shared SessionStore contract."""
 
 
 # --- SqlSessionStore: dispose/cleanup --------------------------------------

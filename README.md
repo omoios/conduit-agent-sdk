@@ -417,9 +417,9 @@ Working ACP protocol implementation with a full streaming pipeline: spawn → in
 - Rich content: images, audio, resources
 - Cancel/Interrupt: both control and ACP notification
 - 30 runnable examples
-- 18 test modules, 211 tests passing
+- 20 test modules, 211 tests passing (+17 env-gated Postgres/Redis integration tests)
 - Custom tools: @tool decorator + in-process MCP HTTP server (callable by agents)
-- Session persistence: File/Sql/RedisSessionStore backends
+- Session persistence: InMemory/File/Sql/RedisSessionStore backends with verified Postgres + Redis integration suites
 - Elicitation: unstable `elicitation/create` handling + agent-side `request_elicitation`
 
 Known limitations:
