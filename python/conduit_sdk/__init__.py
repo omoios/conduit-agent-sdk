@@ -66,7 +66,20 @@ from conduit_sdk.permissions import (
     console_approve,
     deny_all,
 )
-from conduit_sdk.proxy import ContextInjector, Proxy, ProxyChain, ResponseFilter
+from conduit_sdk.proxy import (
+    ContextInjector,
+    Proxy,
+    ProxyChain,
+    ResponseFilter,
+    conductor_available,
+    conductor_command,
+)
+from conduit_sdk.redaction import (
+    DEFAULT_SECRET_PATTERNS,
+    RedactionFilter,
+    redact_events,
+    redact_patterns,
+)
 from conduit_sdk.elicitation import (
     ElicitationAction,
     ElicitationMode,
@@ -202,6 +215,13 @@ __all__ = [
     "ProxyChain",
     "ContextInjector",
     "ResponseFilter",
+    "conductor_available",
+    "conductor_command",
+    # Redaction (proxy stage on the normalized event stream)
+    "RedactionFilter",
+    "redact_events",
+    "redact_patterns",
+    "DEFAULT_SECRET_PATTERNS",
     # Types — original
     "Capabilities",
     "ClientConfig",

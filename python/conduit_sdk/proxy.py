@@ -18,7 +18,47 @@ from typing import Any
 
 from conduit_sdk._conduit_sdk import ProxyConfig, RustProxyChain
 from conduit_sdk.exceptions import ProxyError
+import shlex
+import shutil
 
+__all__ = [
+    "ContextInjector",
+    "Proxy",
+    "ProxyChain",
+    "ResponseFilter",
+    "conductor_available",
+    "conductor_command",
+]
+
+
+def conductor_available(
+    conductor: str = "agent-client-protocol-conductor",
+) -> bool:
+    """Check whether the conductor binary is available on PATH."""
+    return shutil.which(conductor) is not None
+
+
+def conductor_command(
+    base_command: list[str],
+    chain: ProxyChain,
+    *,
+    conductor: str = "agent-client-protocol-conductor",
+) -> list[str]:
+    """Return the argv list that spawns the conductor binary with the proxy chain.
+
+    Each proxy's ``.command`` and the *base_command* are shell-quoted into
+    single conductor arguments.
+
+    Raises :class:`ProxyError` if the chain is empty.
+    """
+    if not chain.proxies:
+        raise ProxyError("proxy chain is empty")
+
+    argv = [conductor, "agent"]
+    for p in chain.proxies:
+        argv.append(shlex.join(p.command))
+    argv.append(shlex.join(base_command))
+    return argv
 
 class Proxy(ABC):
     """Base class for custom ACP proxies.
@@ -64,17 +104,62 @@ class ProxyChain:
         self._proxies.insert(index, proxy)
         return self
 
-    async def build(self) -> None:
+    async def build(
+        self,
+        *,
+        base_command: list[str] | None = None,
+        require_binary: bool = False,
+    ) -> list[str] | None:
         """Build and activate the proxy chain.
 
-        Spawns each proxy subprocess and connects them via the conductor.
+        When *base_command* is given, returns the conductor argv for the
+        proxy chain without spawning a subprocess.  Otherwise delegates to
+        the Rust-native chain builder (backward-compatible path).
+
+        Raises :class:`ProxyError` if the chain is empty, or if
+        *require_binary* is ``True`` and the conductor binary is missing.
         """
         if not self._proxies:
             raise ProxyError("cannot build an empty proxy chain")
 
+        if base_command is not None:
+            if require_binary and not conductor_available():
+                raise ProxyError(
+                    "The 'agent-client-protocol-conductor' binary is required for"
+                    " live proxy chaining, but it is not installed on PATH."
+                )
+            return conductor_command(base_command, self)
+
+        # Backward-compatible path: delegate to the Rust core.
         for proxy in self._proxies:
             await self._rust_chain.add(proxy.to_config())
         await self._rust_chain.build()
+        return None
+
+    def wrap_command(
+        self,
+        base_command: list[str],
+        *,
+        require_binary: bool = False,
+    ) -> list[str]:
+        """Thin wrapper over :func:`conductor_command` with an optional
+        binary-availability guard.
+
+        Raises :class:`ProxyError` if the chain is empty, or if
+        *require_binary* is ``True`` and the conductor binary is missing.
+        """
+        if not self._proxies:
+            raise ProxyError("cannot build an empty proxy chain")
+
+        if require_binary and not conductor_available():
+            raise ProxyError(
+                "The 'agent-client-protocol-conductor' binary is required for"
+                " live proxy chaining, but it is not installed on PATH."
+            )
+
+        return conductor_command(base_command, self)
+
+
 
     @property
     def proxies(self) -> list[Proxy]:
