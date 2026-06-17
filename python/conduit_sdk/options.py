@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable
 if TYPE_CHECKING:
+    from conduit_sdk.elicitation import ElicitationHandler
     from conduit_sdk.session_store import SessionStore
 
 
@@ -65,6 +66,7 @@ class AgentOptions:
     include_partial_messages: bool = False
     hooks: dict | None = None
     session_store: SessionStore | None = None
+    elicitation_handler: ElicitationHandler | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize non-None fields to a dict for the control protocol."""

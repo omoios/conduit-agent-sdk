@@ -67,6 +67,15 @@ from conduit_sdk.permissions import (
     deny_all,
 )
 from conduit_sdk.proxy import ContextInjector, Proxy, ProxyChain, ResponseFilter
+from conduit_sdk.elicitation import (
+    ElicitationAction,
+    ElicitationMode,
+    ElicitationRequest,
+    ElicitationResponse,
+    auto_accept,
+    auto_decline,
+    console_elicit,
+)
 from conduit_sdk.query import Query
 
 # Re-bind the query function AFTER importing the query submodule (which
@@ -145,6 +154,14 @@ __all__ = [
     "PermissionResultDeny",
     "ToolPermissionContext",
     "allow_all",
+    # Elicitation (unstable)
+    "ElicitationMode",
+    "ElicitationAction",
+    "ElicitationRequest",
+    "ElicitationResponse",
+    "auto_accept",
+    "auto_decline",
+    "console_elicit",
     "deny_all",
     "console_approve",
     # Tools

@@ -153,6 +153,12 @@ class Client:
         # Wire the permission callback into Rust before connecting.
         if self._options is not None and self._options.can_use_tool is not None:
             self._rust_client.set_permission_callback(self._options.can_use_tool)
+        # Wire the elicitation handler into Rust before connecting.
+        if self._options is not None and self._options.elicitation_handler is not None:
+            from conduit_sdk.elicitation import _make_elicitation_bridge
+
+            bridge = _make_elicitation_bridge(self._options.elicitation_handler)
+            self._rust_client.set_elicitation_callback(bridge)
 
         self._capabilities = await self._rust_client.connect()
         self._connected = True

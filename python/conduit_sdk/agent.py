@@ -46,6 +46,7 @@ _SESSION_LOAD = "session/load"
 _SESSION_PROMPT = "session/prompt"
 _SESSION_CANCEL = "session/cancel"
 _SESSION_UPDATE = "session/update"
+_ELICITATION_CREATE = "elicitation/create"
 
 _STOP_REASONS = {
     "end_turn",
@@ -69,10 +70,12 @@ class AgentContext:
         session_id: str,
         write: Callable[[dict[str, Any]], Awaitable[None]],
         mcp_servers: list[dict[str, Any]] | None = None,
+        request_sender: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
     ) -> None:
         self.session_id = session_id
         self._write = write
         self.mcp_servers = mcp_servers or []
+        self._request_sender = request_sender
 
     async def send_text(self, text: str) -> None:
         """Stream an ``agent_message_chunk`` with a text block."""
@@ -132,6 +135,54 @@ class AgentContext:
             None, _mcp_call, server["url"], tool_name, arguments or {}
         )
 
+    async def request_elicitation(
+        self,
+        message: str,
+        *,
+        requested_schema: dict[str, Any] | None = None,
+        mode: str = "form",
+        url: str | None = None,
+        elicitation_id: str | None = None,
+        tool_call_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Request structured user input from the client (**UNSTABLE**).
+
+        Sends an ``elicitation/create`` request and awaits the client's
+        response. For ``form`` mode, ``requested_schema`` is a JSON Schema
+        object describing the form fields. For ``url`` mode, both ``url`` and
+        ``elicitation_id`` are required.
+
+        Returns the raw response dict: ``{"action": "accept", "content": ...}``,
+        ``{"action": "decline"}``, or ``{"action": "cancel"}``.
+        """
+        if self._request_sender is None:
+            raise RuntimeError(
+                "this agent transport cannot send requests to the client"
+            )
+        params: dict[str, Any] = {
+            "message": message,
+            "mode": mode,
+            "sessionId": self.session_id,
+        }
+        if tool_call_id:
+            params["toolCallId"] = tool_call_id
+        if mode == "form":
+            if requested_schema is None:
+                raise ValueError("form elicitation requires requested_schema")
+            params["requestedSchema"] = requested_schema
+        elif mode == "url":
+            if not url or not elicitation_id:
+                raise ValueError(
+                    "url elicitation requires both url and elicitation_id"
+                )
+            params["url"] = url
+            params["elicitationId"] = elicitation_id
+        else:
+            raise ValueError(
+                f"invalid elicitation mode {mode!r}; expected 'form' or 'url'"
+            )
+        return await self._request_sender(_ELICITATION_CREATE, params)
+
 
 class AgentServer:
     """An ACP agent server that speaks the protocol over stdio.
@@ -149,6 +200,9 @@ class AgentServer:
         self.version = version
         self._handlers: dict[str, Callable[..., Any]] = {}
         self._session_mcp: dict[str, list[dict[str, Any]]] = {}
+        # Pending outbound requests (agent -> client), keyed by request id.
+        self._pending_requests: dict[str, asyncio.Future] = {}
+        self._req_counter: int = 0
 
     # -- Handler registration ---------------------------------------------
 
@@ -221,7 +275,22 @@ class AgentServer:
                 msg = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if not isinstance(msg, dict) or "method" not in msg:
+            if not isinstance(msg, dict):
+                continue
+            # A message carrying an id but no method is a RESPONSE to a
+            # request this agent sent to the client (e.g. elicitation/create).
+            if "id" in msg and "method" not in msg:
+                req_id = str(msg["id"])
+                fut = self._pending_requests.pop(req_id, None)
+                if fut is not None and not fut.done():
+                    if "error" in msg:
+                        fut.set_exception(
+                            RuntimeError(f"agent request error: {msg['error']}")
+                        )
+                    else:
+                        fut.set_result(msg.get("result") or {})
+                continue
+            if "method" not in msg:
                 continue
             asyncio.create_task(self._handle(msg, write))  # noqa: RUF006
 
@@ -332,7 +401,17 @@ class AgentServer:
             return {"stopReason": "refusal"}
         session_id = str(params.get("sessionId", ""))
         content = params.get("prompt", []) or []
-        ctx = AgentContext(session_id, write, self._session_mcp.get(session_id, []))
+        async def send_request(
+            method: str, params: dict[str, Any]
+        ) -> dict[str, Any]:
+            return await self._send_request(method, params, write)
+
+        ctx = AgentContext(
+            session_id,
+            write,
+            self._session_mcp.get(session_id, []),
+            send_request,
+        )
         stop = await _maybe_await(handler(ctx, session_id, content))
         if stop is None:
             stop = "end_turn"
@@ -341,6 +420,28 @@ class AgentServer:
                 f"invalid stop_reason {stop!r}; expected one of {sorted(_STOP_REASONS)}"
             )
         return {"stopReason": stop}
+
+    async def _send_request(
+        self,
+        method: str,
+        params: dict[str, Any],
+        write: Callable[[dict[str, Any]], Awaitable[None]],
+    ) -> dict[str, Any]:
+        """Send a JSON-RPC *request* to the client and await its response.
+
+        Registers an :class:`asyncio.Future` keyed by request id; the
+        ``_serve`` read loop resolves it when the matching response arrives.
+        Used by :meth:`AgentContext.request_elicitation`.
+        """
+        loop = asyncio.get_running_loop()
+        self._req_counter += 1
+        req_id = f"agent-{self._req_counter}"
+        fut: asyncio.Future[dict[str, Any]] = loop.create_future()
+        self._pending_requests[req_id] = fut
+        await write(
+            {"jsonrpc": "2.0", "id": req_id, "method": method, "params": params}
+        )
+        return await fut
 
 
 async def _maybe_await(value: Any) -> Any:
