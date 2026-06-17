@@ -248,6 +248,47 @@ Current session ID.
 
 Current mode.
 
+
+## conduit_sdk.AgentServer
+
+```python
+class AgentServer:
+    def __init__(self, name, *, version="1.0.0", description=None)
+```
+
+Author an ACP agent in Python. Register async handlers, then call `run()` — it speaks ACP over stdio.
+
+### Handlers
+
+**`@server.on_prompt`** — Required. Stream response via `ctx.send_text(...)` / `ctx.send_thought(...)` / `ctx.update(...)`, return stop reason.
+
+**`@server.on_new_session`** (optional), **`@server.on_initialize`** (optional), **`@server.on_session_load`** (optional), **`@server.on_cancel`** (optional) — sensible defaults provided.
+
+### AgentContext
+
+Streaming handle passed to prompt handlers:
+
+- `await ctx.send_text(text)` — stream text delta
+- `await ctx.send_thought(text)` — stream thought delta
+- `await ctx.update(partial)` — send arbitrary update dict
+- `await ctx.call_tool(name, args)` — call an in-process MCP tool
+
+**Example:**
+```python
+from conduit_sdk import AgentServer
+
+server = AgentServer(name="my-agent")
+
+@server.on_prompt
+async def answer(ctx, session_id, content):
+    text = "".join(b.get("text", "") for b in content if isinstance(b, dict))
+    await ctx.send_text(f"You said: {text}")
+    return "end_turn"
+
+if __name__ == "__main__":
+    server.run()
+```
+
 ## conduit_sdk.Registry
 
 ```python
@@ -345,6 +386,7 @@ class AgentOptions:
     cwd: str | None = None
     env: dict[str, str] = field(default_factory=dict)
     include_partial_messages: bool = False
+    session_store: SessionStore | None = None
     hooks: dict | None = None
 ```
 
@@ -364,6 +406,7 @@ Comprehensive configuration for an ACP agent connection.
 - `env` (dict[str, str]): Environment variables
 - `include_partial_messages` (bool): Stream events as they arrive
 - `hooks` (dict | None): Lifecycle hook configuration
+- `session_store` (SessionStore | None): Session persistence backend for durable session/update replay
 
 ### Methods
 
@@ -497,7 +540,7 @@ async def my_tool(param: str) -> str:
 
 Registers the function as a tool definition in the SDK.
 
-**Note:** Tools are registered in the SDK but not yet callable by agents. MCP server subprocess wiring is planned for Phase 3.
+**Note:** Tools are callable by agents via the in-process MCP HTTP server (started automatically during `connect()`).
 
 **Parameters:**
 - `name` (str | None): Tool name (defaults to function name)
@@ -540,6 +583,44 @@ server = create_sdk_mcp_server("my-tools", tools=[read_file])
 options = AgentOptions(mcp_servers={"my-tools": server})
 ```
 
+
+## conduit_sdk.SessionStore
+
+Protocol for session persistence backends.
+
+```python
+class SessionStore(Protocol):
+    async def save_metadata(self, session_id, metadata) -> None
+    async def append_update(self, session_id, update) -> None
+    async def load_updates(self, session_id) -> list[dict]
+    async def list_sessions(self) -> list[str]
+    async def get_metadata(self, session_id) -> dict | None
+    async def delete_session(self, session_id) -> None
+    async def clear(self) -> None
+```
+
+### Implementations
+
+**`conduit_sdk.InMemorySessionStore()`** — Process-local dict-backed store, no dependencies.
+
+**`conduit_sdk.FileSessionStore(root)`** — Filesystem store; each session writes `<root>/<session>/metadata.json` + `events.jsonl`.
+
+**`conduit_sdk.SqlSessionStore(async_engine)`** — SQLAlchemy 2.0 async. Use `sqlite+aiosqlite://` for tests, `postgresql+asyncpg://user:pass@host/db` for production.
+
+**`conduit_sdk.RedisSessionStore(redis_client)`** — Redis-backed via `redis.asyncio`.
+
+### Usage
+
+Pass a store via `AgentOptions`:
+
+```python
+from conduit_sdk import AgentOptions, FileSessionStore
+
+store = FileSessionStore("./sessions")
+options = AgentOptions(session_store=store)
+```
+
+Each prompt's updates are automatically persisted. Replay later with `await store.load_updates(session_id)`.
 ## conduit_sdk.ProxyChain
 
 ```python

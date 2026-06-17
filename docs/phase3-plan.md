@@ -1,5 +1,7 @@
 # Phase 3: Advanced ACP Features Plan
 
+> **Status (updated):** This is a historical planning document. Item 9 (SDK-hosted MCP server for `@tool` functions) is now **DONE** via the in-process MCP HTTP server — tools are callable by agents. The remaining items (proxy chains via conductor, client `fs/*` and `terminal/*` handlers, MCP-over-ACP transport, HTTP transport, custom extension methods) remain pending.
+
 > **Status**: Draft — awaiting approval before implementation
 > **Prerequisite**: Phase 2 complete (Items 1-8)
 > **Baseline**: Phase 2 final state with all new features tested

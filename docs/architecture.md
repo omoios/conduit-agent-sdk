@@ -22,6 +22,8 @@ The Python layer provides an async developer API that abstracts the complexity o
 
 **session.py** provides the `Session` class for session-specific operations. Sessions can be created or loaded, configured with `set_mode()` and `set_config()`, cancelled, forked, and used for prompting.
 
+**session_store.py** provides session persistence backends for durable replay of `session/update` streams. All backends implement the async `SessionStore` protocol: `InMemorySessionStore` (process-local, no dependencies), `FileSessionStore` (filesystem, JSONL+metadata), `SqlSessionStore` (SQLAlchemy 2.0 async — SQLite for tests, Postgres via `asyncpg` in production), and `RedisSessionStore` (via `redis.asyncio`).
+
 **activate.py** exports the `query()` convenience function. This is a one-liner that handles the entire flow: registry lookup, client creation, connection, prompting, and cleanup. It is useful for simple use cases where you want to prompt an agent without managing the client lifecycle manually.
 
 **registry.py** implements the `Registry` class. It fetches the ACP agent registry from a CDN and caches it locally with a one-hour TTL. The registry resolves agent IDs to shell commands, handling various distribution formats including npx, uvx, and direct binaries. It also handles platform detection (such as darwin-aarch64) and runtime detection.
@@ -32,7 +34,7 @@ The Python layer provides an async developer API that abstracts the complexity o
 
 **proxy.py** contains `ProxyChain`, the `Proxy` base class, `ContextInjector`, and `ResponseFilter`. These provide a proxy chain builder, though the `build()` method is still pending implementation.
 
-**tools.py** exports the `@tool` decorator, `McpSdkServerConfig`, and `create_sdk_mcp_server()`. Tools can be registered but are not yet callable by agents (this requires MCP server subprocess support planned for Phase 3).
+**tools.py** exports the `@tool` decorator, `McpSdkServerConfig`, and `create_sdk_mcp_server()`. Tools ARE callable by agents via the in-process MCP HTTP server — `Client._start_sdk_mcp_servers()` starts these during `connect()` and passes them as HTTP MCP servers to the agent at session creation.
 
 **permissions.py** provides permission callbacks including `allow_all`, `deny_all`, and `console_approve`, along with the `ToolPermissionContext` for structured permission handling.
 
@@ -166,11 +168,12 @@ The following features are complete and functional:
 - Agent info retrieval
 - Rich and multi-modal content in prompts
 
+- Custom tools via @tool decorator + in-process MCP HTTP server (callable by agents)
+- Session persistence with InMemory/File/Sql/RedisSessionStore backends
 ### Not Yet Working
 
 The following features are planned but not yet implemented:
 
-- The `@tool` decorator registers tools but agents cannot call them yet. This requires MCP server subprocess support planned for Phase 3.
 - `ProxyChain.build()` is marked TODO and needs sacp-conductor integration.
 - Client-side file system and terminal capabilities for agent-to-client requests.
 - MCP-over-ACP transport.

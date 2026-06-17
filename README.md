@@ -293,7 +293,6 @@ async def read_file(path: str) -> str:
     return open(path).read()
 ```
 
-Note: Tools are registered in the SDK but not yet callable by agents. This requires MCP server subprocess wiring (Phase 3).
 
 ### Proxy Chains
 
@@ -398,10 +397,11 @@ Working ACP protocol implementation with a full streaming pipeline: spawn → in
 - Cancel/Interrupt: both control and ACP notification
 - 28 runnable examples
 - 12 test modules, 123+ tests passing
+- Custom tools: @tool decorator + in-process MCP HTTP server (callable by agents)
+- Session persistence: File/Sql/RedisSessionStore backends
 
 Known limitations:
 - ProxyChain.build() is a TODO (needs sacp-conductor)
-- @tool functions are registered but not yet callable by agents (Phase 3, needs MCP server subprocess)
 
 See docs/phase2-plan.md and docs/phase3-plan.md for the roadmap.
 

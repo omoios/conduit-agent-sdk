@@ -1,5 +1,7 @@
 # Phase 2: Feature Completion Plan
 
+> **Status (updated):** This is a historical planning document. Items 1–7 are now **complete**. Item 8 (SDK-hosted MCP server for `@tool` functions, stretch goal) is also **DONE** via the in-process MCP HTTP server — tools are callable by agents. `ProxyChain.build()` and the items described in the Phase 3 plan remain pending.
+
 > **Status**: Draft — awaiting approval before implementation
 > **Baseline**: Commit `946d96c` + selective improvements (notification drain, hook dispatch, error mapping, query import fix)
 > **Tests**: 123/123 passing, all 13 examples verified
