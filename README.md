@@ -308,6 +308,26 @@ await chain.build()  # TODO: pending sacp-conductor integration
 
 Note: ProxyChain.build() is not yet implemented and requires sacp-conductor support.
 
+### Elicitation (Unstable)
+
+Handle an agent's `elicitation/create` request — structured user input via a
+form or URL — by passing an `elicitation_handler` to `AgentOptions`. The SDK
+advertises the `elicitation` capability and routes each request to your handler.
+
+```python
+from conduit_sdk import AgentOptions, ElicitationRequest, ElicitationResponse
+
+async def elicit(req: ElicitationRequest) -> ElicitationResponse:
+    # req.mode is "form" or "url"; req.requested_schema describes the fields
+    return ElicitationResponse(action="accept", content={"name": "ada"})
+
+options = AgentOptions(elicitation_handler=elicit)
+```
+
+Built-ins: `auto_accept`, `auto_decline`, `console_elicit`. An authored agent
+can also *request* elicitation via `ctx.request_elicitation(...)`. See
+`docs/conductor-integration.md` and the `acp-cookbook` skill.
+
 ## Examples
 
 Run any example with uv run:
@@ -362,6 +382,7 @@ uv run examples/01_hello_world.py
 | conduit_sdk.HookRunner | Lifecycle hook system (pre/post tool use, etc.) |
 | conduit_sdk.ProxyChain | Compose message-intercepting proxies (partial) |
 | conduit_sdk.permissions | Permission callbacks and presets |
+| conduit_sdk.elicitation | Unstable elicitation handler types (accept/decline/cancel) |
 | conduit_sdk.types | Content blocks, streaming events, messages |
 | conduit_sdk.exceptions | Error hierarchy |
 
@@ -395,10 +416,11 @@ Working ACP protocol implementation with a full streaming pipeline: spawn → in
 - Agent info: name, version, title after connection
 - Rich content: images, audio, resources
 - Cancel/Interrupt: both control and ACP notification
-- 28 runnable examples
-- 12 test modules, 123+ tests passing
+- 30 runnable examples
+- 18 test modules, 211 tests passing
 - Custom tools: @tool decorator + in-process MCP HTTP server (callable by agents)
 - Session persistence: File/Sql/RedisSessionStore backends
+- Elicitation: unstable `elicitation/create` handling + agent-side `request_elicitation`
 
 Known limitations:
 - ProxyChain.build() is a TODO (needs sacp-conductor)

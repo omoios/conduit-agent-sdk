@@ -488,6 +488,42 @@ options = AgentOptions(can_use_tool=can_use_tool)
 options = AgentOptions(can_use_tool=permissions.console_approve)
 ```
 
+## conduit_sdk.elicitation (Unstable)
+
+Elicitation lets an agent request structured user input from the client via
+`elicitation/create`. Pass an `elicitation_handler` to `AgentOptions`; the SDK
+advertises the unstable `elicitation` capability and routes each request to it.
+
+```python
+from conduit_sdk import (
+    AgentOptions, ElicitationRequest, ElicitationResponse,
+    auto_accept, auto_decline, console_elicit,
+)
+
+async def elicit(req: ElicitationRequest) -> ElicitationResponse:
+    # req.mode ("form"|"url"), req.message, req.requested_schema, req.url, ...
+    return ElicitationResponse(action="accept", content={"name": "ada"})
+
+options = AgentOptions(elicitation_handler=elicit)
+```
+
+| Name | Description |
+|------|-------------|
+| `ElicitationRequest` | Inbound request (message, mode, requested_schema, url, elicitation_id, session_id, tool_call_id) |
+| `ElicitationResponse` | Decision: `action="accept"` (with `content`), `"decline"`, or `"cancel"` |
+| `auto_accept` / `auto_decline` / `console_elicit` | Built-in handlers |
+
+An authored agent can also **request** elicitation from its client:
+
+```python
+@server.on_prompt
+async def handler(ctx, session_id, content):
+    result = await ctx.request_elicitation(
+        "Name?", requested_schema={"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}
+    )
+    # result == {"action": "accept", "content": {"name": ...}} | {"action": "decline"} | {"action": "cancel"}
+```
+
 ## conduit_sdk.HookRunner
 
 ```python

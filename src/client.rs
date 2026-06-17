@@ -26,6 +26,11 @@ use agent_client_protocol::schema::{
     SessionUpdate as AcpSessionUpdate, ToolCallStatus,
 };
 use agent_client_protocol::{Client, ConnectionTo, Agent, Responder, UntypedMessage};
+use agent_client_protocol::schema::{
+    ClientCapabilities, CreateElicitationRequest, CreateElicitationResponse,
+    ElicitationAcceptAction, ElicitationAction, ElicitationCapabilities,
+    ElicitationContentValue, ElicitationFormCapabilities, ElicitationUrlCapabilities,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Mutex};
@@ -169,6 +174,8 @@ pub struct RustClient {
     prompt_reply_rx: Arc<Mutex<Option<oneshot::Receiver<Result<(), ConduitError>>>>>,
     /// Python permission callback, set before connect().
     permission_callback: Arc<std::sync::Mutex<Option<PyObject>>>,
+    /// Python elicitation callback (unstable), set before connect().
+    elicitation_callback: Arc<std::sync::Mutex<Option<PyObject>>>,
 }
 
 #[pymethods]
@@ -181,6 +188,7 @@ impl RustClient {
             update_rx: Arc::new(Mutex::new(None)),
             prompt_reply_rx: Arc::new(Mutex::new(None)),
             permission_callback: Arc::new(std::sync::Mutex::new(None)),
+            elicitation_callback: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -192,6 +200,14 @@ impl RustClient {
         *self.permission_callback.lock().unwrap() = Some(callback);
     }
 
+    /// Store a Python elicitation callback invoked for `elicitation/create`
+    /// requests. Must be called before `connect()`. When set, the client
+    /// advertises the unstable `elicitation` capability during initialize.
+    /// Signature: `async def bridge(payload_json: str) -> str`.
+    fn set_elicitation_callback(&self, callback: PyObject) {
+        *self.elicitation_callback.lock().unwrap() = Some(callback);
+    }
+
     /// Spawn the agent subprocess and perform the ACP initialize handshake.
     ///
     /// Returns the agent's advertised [`Capabilities`].
@@ -200,6 +216,13 @@ impl RustClient {
         let config = self.config.clone();
         let update_rx_slot = self.update_rx.clone();
         let perm_callback_for_connect = self.permission_callback.clone();
+        let elicit_callback_for_connect = self.elicitation_callback.clone();
+        // Advertise the unstable elicitation capability only when a handler
+        // is configured, so we never claim support we cannot fulfill.
+        let advertise_elicitation = self.elicitation_callback.lock().unwrap().is_some();
+        // Capture the Python event-loop task locals so handler closures
+        // running on the spawned background task can call `into_future()`.
+        let task_locals = pyo3_async_runtimes::tokio::get_current_locals(py)?;
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let mut process = AgentProcess::spawn(
@@ -228,6 +251,7 @@ impl RustClient {
 
             // Clone the permission callback for the request handler.
             let perm_callback = perm_callback_for_connect;
+            let elicit_callback = elicit_callback_for_connect;
 
             // Build the handler chain with a spawned client task.
             let builder = Client.builder()
@@ -424,6 +448,14 @@ impl RustClient {
                         }
                     },
                     agent_client_protocol::on_receive_request!(),
+                )
+                // --- Elicitation requests (unstable) ---
+                .on_receive_request(
+                    async move |request: CreateElicitationRequest, responder: Responder<CreateElicitationResponse>, _cx: ConnectionTo<Agent>| {
+                        let response = call_elicitation_callback(&elicit_callback, &request).await;
+                        responder.respond(response)
+                    },
+                    agent_client_protocol::on_receive_request!(),
                 );
 
             // Spawn the long-lived background task that owns the ACP connection.
@@ -431,10 +463,16 @@ impl RustClient {
             // init handshake + command loop) concurrently; the connection lives
             // as long as acp_task runs and ends when it returns (on Shutdown).
             tokio::spawn(async move {
-                if let Err(e) = builder
-                    .connect_with(transport, move |cx| acp_task(cx, caps_tx, cmd_rx, update_tx))
-                    .await
-                {
+                // Re-enter the Python event-loop context on this detached
+                // task so `into_future()` (permission & elicitation handlers)
+                // can resolve the running loop.
+                let result = pyo3_async_runtimes::tokio::scope(task_locals, async move {
+                    builder
+                        .connect_with(transport, move |cx| acp_task(cx, caps_tx, cmd_rx, update_tx, advertise_elicitation))
+                        .await
+                })
+                .await;
+                if let Err(e) = result {
                     eprintln!("conduit-sdk: ACP background task error: {e}");
                 }
             });
@@ -1206,10 +1244,25 @@ async fn acp_task(
     caps_tx: oneshot::Sender<Result<(Capabilities, Option<String>), ConduitError>>,
     mut cmd_rx: mpsc::Receiver<AcpCommand>,
     update_tx: mpsc::Sender<StreamEvent>,
+    advertise_elicitation: bool,
 ) -> Result<(), agent_client_protocol::Error> {
     // ---- Initialize handshake ----
     let init_req = InitializeRequest::new(agent_client_protocol::schema::ProtocolVersion::LATEST)
         .client_info(Implementation::new("conduit-agent-sdk", env!("CARGO_PKG_VERSION")));
+
+    // Advertise the unstable elicitation capability only when a handler is
+    // configured, so we never claim support we cannot fulfill.
+    let init_req = if advertise_elicitation {
+        init_req.client_capabilities(
+            ClientCapabilities::new().elicitation(
+                ElicitationCapabilities::new()
+                    .form(ElicitationFormCapabilities::new())
+                    .url(ElicitationUrlCapabilities::new()),
+            ),
+        )
+    } else {
+        init_req
+    };
 
     let init_result = cx
         .send_request(init_req)
@@ -1576,6 +1629,95 @@ async fn call_permission_callback(
         PermissionDecision::Deny
     } else {
         PermissionDecision::Allow
+    }
+}
+
+/// Invoke the Python elicitation bridge for an `elicitation/create` request.
+///
+/// Serializes the full ACP request to JSON, calls the Python callback
+/// (`async def bridge(payload_json: str) -> str`), and parses the returned
+/// JSON (`{"action": "accept"|"decline"|"cancel", "content": {...}}`) into a
+/// [`CreateElicitationResponse`]. Any failure resolves to `Cancel`.
+async fn call_elicitation_callback(
+    callback_arc: &Arc<std::sync::Mutex<Option<PyObject>>>,
+    request: &CreateElicitationRequest,
+) -> CreateElicitationResponse {
+    let callback = Python::with_gil(|py| {
+        let guard = callback_arc.lock().unwrap();
+        guard.as_ref().map(|cb| cb.clone_ref(py))
+    });
+
+    let callback = match callback {
+        Some(cb) => cb,
+        // No handler registered: cancel rather than blocking the agent.
+        None => return CreateElicitationResponse::new(ElicitationAction::Cancel),
+    };
+
+    // Serialize the full request; the Python bridge reads message / mode /
+    // requestedSchema / url / sessionId / toolCallId from it.
+    let payload = serde_json::to_string(request).unwrap_or_else(|_| "{}".into());
+
+    let future = Python::with_gil(|py| -> PyResult<_> {
+        let coro = callback.call1(py, (payload,))?;
+        pyo3_async_runtimes::tokio::into_future(coro.into_bound(py))
+    });
+
+    let py_string = match future {
+        Ok(f) => match f.await {
+            Ok(obj) => Python::with_gil(|py| {
+                obj.extract::<String>(py)
+                    .unwrap_or_else(|_| "{\"action\":\"cancel\"}".into())
+            }),
+            Err(_) => return CreateElicitationResponse::new(ElicitationAction::Cancel),
+        },
+        Err(_) => return CreateElicitationResponse::new(ElicitationAction::Cancel),
+    };
+
+    let parsed: serde_json::Value = serde_json::from_str(&py_string)
+        .unwrap_or_else(|_| serde_json::json!({"action":"cancel"}));
+
+    let action = parsed
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("cancel");
+
+    match action {
+        "accept" => {
+            let mut content_map = std::collections::BTreeMap::new();
+            if let Some(obj) = parsed.get("content").and_then(|v| v.as_object()) {
+                for (k, v) in obj {
+                    if let Some(ecv) = json_to_elicitation_value(v.clone()) {
+                        content_map.insert(k.clone(), ecv);
+                    }
+                }
+            }
+            CreateElicitationResponse::new(ElicitationAction::Accept(
+                ElicitationAcceptAction::new().content(Some(content_map)),
+            ))
+        }
+        "decline" => CreateElicitationResponse::new(ElicitationAction::Decline),
+        _ => CreateElicitationResponse::new(ElicitationAction::Cancel),
+    }
+}
+
+/// Convert a JSON value into an elicitation content value.
+fn json_to_elicitation_value(v: serde_json::Value) -> Option<ElicitationContentValue> {
+    match v {
+        serde_json::Value::String(s) => Some(ElicitationContentValue::String(s)),
+        serde_json::Value::Bool(b) => Some(ElicitationContentValue::Boolean(b)),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Some(ElicitationContentValue::Integer(i))
+            } else {
+                n.as_f64().map(ElicitationContentValue::Number)
+            }
+        }
+        serde_json::Value::Array(arr) => Some(ElicitationContentValue::StringArray(
+            arr.into_iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect(),
+        )),
+        _ => None,
     }
 }
 
