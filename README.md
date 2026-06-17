@@ -232,7 +232,7 @@ async def log_tool(ctx):
     return ctx
 ```
 
-Available hooks: PreToolUse, PostToolUse, PromptSubmit, ResponseReceived, SessionCreated, SessionDestroyed, Connected, Disconnected.
+Available hooks: PreToolUse, PostToolUse, PromptSubmit, ResponseReceived, SessionCreated, SessionDestroyed, Connected, Disconnected, UserPromptSubmit, Stop, SubagentStart, SubagentStop, PermissionRequest, Notification, PreCompact. Registrations accept `priority`, `matcher`, `timeout`, and `blocking` (a blocking hook can short-circuit the operation).
 
 ### Agent Options
 
@@ -299,14 +299,24 @@ async def read_file(path: str) -> str:
 Compose message-intercepting proxies.
 
 ```python
-from conduit_sdk import ProxyChain, ContextInjector
+from conduit_sdk import ProxyChain, ContextInjector, conductor_command
 
 chain = ProxyChain()
 chain.add(ContextInjector(context="Be concise."))
-await chain.build()  # TODO: pending sacp-conductor integration
+
+# Wrap the base agent command with the conductor so the proxies chain in front of it:
+#   [conductor, "agent", <proxy cmd>, ..., <base agent cmd>]
+wrapped = chain.wrap_command(["claude", "--agent"])
+async with Client(wrapped) as client:
+    ...
 ```
 
-Note: ProxyChain.build() is not yet implemented and requires sacp-conductor support.
+`conductor_command(base, chain)` / `ProxyChain.wrap_command(base)` build the
+command for the [`agent-client-protocol-conductor`](https://crates.io/crates/agent-client-protocol-conductor)
+binary, which spawns each proxy as a subprocess and chains them via the
+`_proxy/successor/*` protocol. Live chaining requires that binary to be
+installed (on PATH); `wrap_command(base, require_binary=True)` raises a clear
+`ProxyError` if it is absent.
 
 ### Elicitation (Unstable)
 
