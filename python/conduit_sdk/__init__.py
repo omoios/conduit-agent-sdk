@@ -99,6 +99,15 @@ from conduit_sdk.session_store import (
     SessionStore,
     SqlSessionStore,
 )
+from conduit_sdk.runlayer import (
+    Adapter,
+    AgentEvent,
+    Result,
+    Run,
+    Runner,
+    acp_adapter,
+    mock_adapter,
+)
 from conduit_sdk.types import (
     Agent,
     AudioBlock,
@@ -178,6 +187,16 @@ __all__ = [
     "HookRunner",
     "HookType",
     "RegisteredHook",
+    # Run layer (unstable) — runlayer.Agent is intentionally NOT re-exported
+    # here (it collides with the conduit_sdk.types Agent enum); access it as
+    # conduit_sdk.runlayer.Agent.
+    "AgentEvent",
+    "Run",
+    "Runner",
+    "Result",
+    "Adapter",
+    "mock_adapter",
+    "acp_adapter",
     # Proxy
     "Proxy",
     "ProxyChain",
