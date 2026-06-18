@@ -319,6 +319,11 @@ class Client:
             yield update
             if store is not None:
                 await store.append_update(session_id, self._record_update(update))
+            # A Done update is terminal — the agent's turn has ended. recv_update
+            # only returns None for a turn that reported no stop_reason, so we
+            # must also stop on an explicit Done or the next recv blocks forever.
+            if update.kind == UpdateKind.Done:
+                break
 
     async def prompt_sync(
         self, text: str | list, *, session_id: str | None = None
