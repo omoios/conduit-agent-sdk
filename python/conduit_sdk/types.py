@@ -55,8 +55,6 @@ __all__ = [
     "ThinkingBlock",
     "ToolUseBlock",
     "ToolResultBlock",
-    # Rate limit
-    "RateLimitInfo",
     # Skill activation
     "SkillResult",
     # Agent enum
@@ -335,58 +333,6 @@ class EmbeddedResourceBlock:
         if self.blob is not None:
             resource["blob"] = self.blob
         return {"type": "resource", "resource": resource}
-
-
-@dataclass
-class RateLimitInfo:
-    """Rate limit event data from the agent.
-
-    This is surfaced when the agent sends a ``rate_limit_event``
-    extension notification (e.g. from Claude).
-
-    Parameters
-    ----------
-    status:
-        Rate limit status (e.g. ``"allowed_warning"``).
-    resets_at:
-        Unix timestamp when the rate limit resets.
-    rate_limit_type:
-        Type of rate limit (e.g. ``"seven_day"``).
-    utilization:
-        Current utilization as a float (0.0–1.0).
-    is_using_overage:
-        Whether overage is being consumed.
-    surpassed_threshold:
-        The threshold that was surpassed (e.g. 0.75).
-    raw_json:
-        The full raw JSON string for any extra fields.
-    """
-
-    status: str = ""
-    resets_at: int = 0
-    rate_limit_type: str = ""
-    utilization: float = 0.0
-    is_using_overage: bool = False
-    surpassed_threshold: float = 0.0
-    raw_json: str = ""
-
-    @classmethod
-    def from_json(cls, json_str: str) -> "RateLimitInfo":
-        """Parse from the JSON string in ``SessionUpdate.rate_limit_json``."""
-        import json
-
-        data = json.loads(json_str)
-        params = data.get("params", {})
-        info = params.get("rate_limit_info", params)
-        return cls(
-            status=info.get("status", ""),
-            resets_at=info.get("resetsAt", 0),
-            rate_limit_type=info.get("rateLimitType", ""),
-            utilization=info.get("utilization", 0.0),
-            is_using_overage=info.get("isUsingOverage", False),
-            surpassed_threshold=info.get("surpassedThreshold", 0.0),
-            raw_json=json_str,
-        )
 
 
 # Union type for prompt content

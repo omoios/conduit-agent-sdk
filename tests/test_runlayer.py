@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
 
@@ -31,6 +32,10 @@ from conduit_sdk._conduit_sdk import UpdateKind
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _content(text: str) -> str:
+    """Build an ACP tool_content JSON string carrying one text block."""
+    return json.dumps([{"type": "content", "content": {"type": "text", "text": text}}])
 
 
 class _StubUpdate:
@@ -63,16 +68,22 @@ class _StubUpdate:
 
 
 class _StubClient:
-    """A mock client that yields pre-built stub updates from ``prompt_stream``."""
+    """A mock client that yields stub updates as canonical SessionEvents.
+
+    The real ``Client.prompt_stream`` yields :class:`SessionEvent` objects, so
+    each stub is run through :func:`normalize` to match that contract.
+    """
 
     def __init__(self, updates: list[_StubUpdate]) -> None:
         self._updates = updates
 
     async def prompt_stream(
         self, text: str, *, session_id: str | None = None
-    ) -> AsyncIterator[_StubUpdate]:
+    ) -> AsyncIterator[Any]:
+        from conduit_sdk.events import normalize
+
         for u in self._updates:
-            yield u
+            yield normalize(u)
 
 
 # ---------------------------------------------------------------------------
@@ -368,13 +379,20 @@ class TestAcpNormalization:
         ]
         assert matches, "ToolUseStart → tool.started missing or wrong payload"
 
-    def test_tool_use_end_maps_to_tool_completed(self) -> None:
+    def test_terminal_tool_update_maps_to_tool_completed(self) -> None:
+        # A terminal ToolCallUpdate (status completed/failed) — preceded by the
+        # ToolCallStart that registers the title — becomes tool.completed.
         events = self._collect([
             _StubUpdate(
-                UpdateKind.ToolUseEnd,
+                UpdateKind.ToolUseStart,
                 tool_name="read_file",
                 tool_use_id="call-1",
-                tool_status="success",
+            ),
+            _StubUpdate(
+                UpdateKind.ToolUseUpdate,
+                tool_use_id="call-1",
+                tool_status="completed",
+                tool_content=_content("done"),
             ),
         ])
         matches = [
@@ -383,8 +401,10 @@ class TestAcpNormalization:
             and e.payload
             and e.payload.get("toolName") == "read_file"
             and e.payload.get("ok") is True
+            and e.payload.get("callId") == "call-1"
+            and e.payload.get("outputPreview") == "done"
         ]
-        assert matches, "ToolUseEnd → tool.completed missing"
+        assert matches, "terminal ToolCallUpdate → tool.completed missing or wrong"
 
     def test_done_maps_to_run_completed(self) -> None:
         events = self._collect([
@@ -393,30 +413,59 @@ class TestAcpNormalization:
         assert any(e.type == "run.completed" for e in events), \
             "Done → run.completed missing"
 
-    def test_error_maps_to_run_failed(self) -> None:
+    def test_error_maps_to_agent_update(self) -> None:
+        # UpdateKind.Error normalizes to Unknown (failures surface as exceptions,
+        # not events — see test_conduit_error_maps_to_run_failed).
         events = self._collect([
             _StubUpdate(UpdateKind.Error, error="crash"),
         ])
         matches = [
             e for e in events
+            if e.type == "agent.update"
+            and e.payload
+            and e.payload.get("event") == "unknown"
+            and e.payload.get("kind") == "error"
+        ]
+        assert matches, "Error → agent.update (Unknown) missing or wrong"
+
+    def test_conduit_error_maps_to_run_failed(self) -> None:
+        # A client whose prompt_stream raises ConduitError → run.failed.
+        from conduit_sdk.exceptions import ConduitError
+
+        class _RaisingClient:
+            async def prompt_stream(self, text, *, session_id=None):
+                raise ConduitError("agent exploded")
+                yield  # unreachable — makes this an async generator
+
+        async def _run() -> list[AgentEvent]:
+            adapter = acp_adapter(_RaisingClient())
+            return [ev async for ev in adapter.run("fake-task", run_id="test-run")]
+
+        import asyncio
+        events = asyncio.run(_run())
+        matches = [
+            e for e in events
             if e.type == "run.failed"
             and e.payload
             and e.payload.get("code") == "agent_error"
-            and e.payload.get("message") == "crash"
+            and "exploded" in e.payload.get("message", "")
         ]
-        assert matches, "Error → run.failed missing or wrong payload"
+        assert matches, "ConduitError → run.failed missing or wrong"
 
-    def test_usage_maps_to_agent_usage(self) -> None:
+    def test_usage_maps_to_agent_update(self) -> None:
+        # Per the catalog, Usage (like other non-delta updates) → agent.update.
         events = self._collect([
-            _StubUpdate(UpdateKind.Usage, usage_json='{"tokens": 42}'),
+            _StubUpdate(UpdateKind.Usage, usage_json='{"used": 42, "size": 100}'),
         ])
         matches = [
             e for e in events
-            if e.type == "agent.usage"
+            if e.type == "agent.update"
             and e.payload
-            and e.payload.get("tokens") == 42
+            and e.payload.get("event") == "usage"
+            and e.payload.get("used") == 42
+            and e.payload.get("size") == 100
         ]
-        assert matches, "Usage → agent.usage missing"
+        assert matches, "Usage → agent.update missing or wrong"
 
     # -- run.started is always emitted before any update events -------------
 

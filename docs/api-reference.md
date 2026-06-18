@@ -108,9 +108,12 @@ Context manager (auto connect/disconnect).
 
 Stream response Messages (accumulated text, not deltas). `text` can be a string or list of content blocks.
 
-**`async for update in client.prompt_stream(text, *, session_id=None)`**
+**`async for event in client.prompt_stream(text, *, session_id=None)`**
 
-Stream raw SessionUpdate objects (text deltas, tool events, etc.).
+Stream canonical `SessionEvent` objects — the typed decode of each wire update
+(text/thought deltas, tool-call start/update, plan, usage, mode/config changes,
+and a terminal `Done`). Hooks, session-store persistence, and redaction (when
+`AgentOptions.redaction_filter` is set) all fire here. See `conduit_sdk.events`.
 
 **`await client.prompt_sync(text, *, session_id=None) -> list[Message]`**
 
@@ -728,25 +731,23 @@ Attributes:
 
 ### Streaming Types
 
-**`SessionUpdate`** — Raw streaming event.
+**`SessionEvent`** (in `conduit_sdk.events`) — the canonical typed decode of a
+wire `SessionUpdate`, yielded by `Client.prompt_stream`. A union of frozen
+dataclasses: `TextDelta`, `ThoughtDelta`, `ToolCallStart`, `ToolCallUpdate`,
+`Plan`, `AvailableCommands`, `ModeChange`, `ConfigUpdate`, `Usage`,
+`SessionInfo`, `RateLimit`, `Done`, `Unknown` (forward-compat). Dispatch with
+`isinstance(event, TextDelta)`, etc. `normalize(update) -> SessionEvent` is the
+total decoder; `to_record(event)` / `from_record(record)` serialize to/from a
+JSON-safe dict carrying an `"event"` discriminator.
 
-Attributes:
-- `kind` (UpdateKind): Event type
+`ToolKind`, `ToolStatus`, `StopReason` are str-enums with the wire values
+(`"read"`, `"completed"`, `"end_turn"`).
 
-**`UpdateKind`** — Enum:
-- `TextDelta`
-- `ThoughtDelta`
-- `ToolUseStart`
-- `ToolUseUpdate`
-- `ToolUseEnd`
-- `ModeChange`
-- `Plan`
-- `ConfigUpdate`
-- `CommandsUpdate`
-- `Usage`
-- `SessionInfo`
-- `Done`
-- `RateLimit`
+**`SessionUpdate`** / **`UpdateKind`** — the raw Rust wire type (flat 18-field
+struct + int enum) that underlies `SessionEvent`. Rarely needed directly;
+`normalize` owns all decoding (`TextDelta`, `ThoughtDelta`, `ToolUseStart`,
+`ToolUseUpdate`, `ModeChange`, `Plan`, `ConfigUpdate`, `CommandsUpdate`,
+`Usage`, `SessionInfo`, `Done`, `RateLimit`, …).
 
 **`StreamEvent`** — Detailed streaming event type.
 
@@ -781,15 +782,11 @@ Methods:
 
 **`ResultMessage`** — Result message type.
 
-**`RateLimitInfo`** — Rate limit notification data.
-
-Attributes:
-- `status` (str)
-- `resets_at` (int): Unix timestamp
-- `rate_limit_type` (str)
-- `utilization` (float): 0.0–1.0
-- `is_using_overage` (bool)
-- `surpassed_threshold` (float)
+**`RateLimit`** (in `conduit_sdk.events`) — rate-limit notification, surfaced
+as a `SessionEvent` variant when the agent sends a `rate_limit_event`
+extension notification. Fields: `status`, `resets_at` (unix ts),
+`rate_limit_type`, `utilization` (0.0–1.0), `is_using_overage` (bool),
+`surpassed_threshold` (float).
 
 **Example:**
 ```python
@@ -811,16 +808,14 @@ See [Skills & Commands Guide](skills-and-commands.md) for the full explanation.
 
 ### Discovery
 
-Available commands appear as `SessionUpdate` events with `kind == UpdateKind.CommandsUpdate`:
+Available commands appear as `AvailableCommands` events in the stream:
 
 ```python
-import json
-from conduit_sdk._conduit_sdk import UpdateKind
+from conduit_sdk.events import AvailableCommands
 
-async for update in client.prompt_stream("Hello"):
-    if update.kind == UpdateKind.CommandsUpdate:
-        commands = json.loads(update.commands_json)
-        for cmd in commands:
+async for event in client.prompt_stream("Hello"):
+    if isinstance(event, AvailableCommands):
+        for cmd in event.commands:
             print(f"{cmd['name']}: {cmd.get('description', '')}")
 ```
 
@@ -881,8 +876,7 @@ class SkillResult:
 
 ### Relevant Types
 
-- `UpdateKind.CommandsUpdate` — Identifies a commands update event
-- `SessionUpdate.commands_json` (str | None) — JSON string of available commands
+- `AvailableCommands` (in `conduit_sdk.events`) — the SessionEvent variant carrying `.commands` (a list)
 - `SkillResult` — Result from `activate_skill` / `activate_skills`
 - Commands are agent-specific; always discover dynamically via streaming
 ## conduit_sdk.exceptions

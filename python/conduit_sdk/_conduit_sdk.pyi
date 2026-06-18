@@ -296,9 +296,6 @@ class RustClient:
     async def resume_session(
         self, session_id: str, cwd: str | None = None
     ) -> str: ...
-    async def prompt(
-        self, text: str, session_id: str | None = None, content_json: str | None = None
-    ) -> list[Message]: ...
     async def send_prompt(
         self, text: str, session_id: str | None = None, content_json: str | None = None
     ) -> None: ...

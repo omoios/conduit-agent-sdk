@@ -52,38 +52,35 @@ async def test_session_store_persists_rich_turn() -> None:
         f"agent text not found in persisted records; got: {all_text!r}"
     )
 
-    # 3) The tool call is reflected as a ToolUseStart record.
-    #    NOTE: the Rust client Debug-formats these ACP enum values, producing
-    #    Rust-style capitalised variant names (e.g. "Read", "Pending") rather
-    #    than the wire format ("read", "pending").
-    tool_starts = [r for r in records if r.get("kind") == "UpdateKind.ToolUseStart"]
+    # 3) The tool call start is persisted as a canonical record discriminated
+    #    by ``event`` (the to_record form), with typed wire-string enum values.
+    tool_starts = [r for r in records if r.get("event") == "tool_call_start"]
     assert len(tool_starts) == 1, (
-        f"expected exactly one ToolUseStart record; got {len(tool_starts)}"
+        f"expected exactly one tool_call_start record; got {len(tool_starts)}"
     )
     ts = tool_starts[0]
-    assert ts.get("tool_name") == "Read config.txt"
+    assert ts.get("title") == "Read config.txt"
     assert ts.get("tool_use_id") == "tc1"
-    assert ts.get("tool_kind") == "Read"
-    assert ts.get("tool_status") == "Pending"
-    assert ts.get("tool_input") == '{"path":"config.txt"}'
+    assert ts.get("kind") == "read"
+    assert ts.get("status") == "pending"
+    assert ts.get("input") == {"path": "config.txt"}
 
-    # 4) The tool completion is reflected as a ToolUseUpdate record
-    tool_updates = [r for r in records if r.get("kind") == "UpdateKind.ToolUseUpdate"]
+    # 4) The terminal tool update is persisted with decoded output + status.
+    tool_updates = [r for r in records if r.get("event") == "tool_call_update"]
     assert len(tool_updates) == 1, (
-        f"expected exactly one ToolUseUpdate record; got {len(tool_updates)}"
+        f"expected exactly one tool_call_update record; got {len(tool_updates)}"
     )
     tu = tool_updates[0]
     assert tu.get("tool_use_id") == "tc1"
-    assert tu.get("tool_status") == "Completed"
+    assert tu.get("status") == "completed"
+    assert tu.get("output") == "port = 8080"
 
     # 5) A Done record with the correct stop_reason ends the turn.
-    #    The Rust client Debug-formats the StopReason enum, so "end_turn"
-    #    becomes "EndTurn".
-    done_records = [r for r in records if r.get("kind") == "UpdateKind.Done"]
+    done_records = [r for r in records if r.get("event") == "done"]
     assert len(done_records) == 1, (
-        f"expected exactly one Done record; got {len(done_records)}"
+        f"expected exactly one done record; got {len(done_records)}"
     )
-    assert done_records[0].get("stop_reason") == "EndTurn"
+    assert done_records[0].get("stop_reason") == "end_turn"
 
     # 6) The session is listed
     sessions = await store.list_sessions()

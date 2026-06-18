@@ -27,6 +27,7 @@ __all__ = [
     "RedactionFilter",
     "redact_events",
     "redact_patterns",
+    "redact_record",
 ]
 
 # ---------------------------------------------------------------------------
@@ -120,6 +121,21 @@ def _deep_scrub(
         return result if modified else value, modified
     # int, float, bool, None, etc. — never modified
     return value, False
+
+# ---------------------------------------------------------------------------
+# Record scrub (persistence path)
+# ---------------------------------------------------------------------------
+
+
+def redact_record(record: dict[str, Any], filter: RedactionFilter) -> dict[str, Any]:
+    """Scrub secrets from a canonical ``to_record`` dict before persistence.
+
+    Walks the record with :func:`_deep_scrub` (dicts/lists/strings) and returns
+    the scrubbed dict. The input is never mutated; if nothing changed the same
+    object is returned.
+    """
+    scrubbed, _ = _deep_scrub(record, filter)
+    return scrubbed
 
 
 # ---------------------------------------------------------------------------

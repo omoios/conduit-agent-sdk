@@ -48,12 +48,13 @@ async def test_acp_adapter_full_turn() -> None:
         tool_started = [e for e in events if e.type == "tool.started"]
         tool_completed = [e for e in events if e.type == "tool.completed"]
         assert len(tool_started) == 1
-        # Note: ToolUseEnd from the Rust client only carries tool_use_id;
-        # tool_name is not set, so tool.completed's payload has toolName="" and
-        # no tool_status/tool_content. See src/client.rs ToolUseEnd variant.
-        assert tool_completed[0].payload["toolName"] == ""
+        # tool.completed is derived from the terminal ToolCallUpdate: it carries
+        # the title (remembered from ToolCallStart), ok, callId, and the decoded
+        # output — not the old id-only ToolUseEnd placeholder.
+        assert tool_completed[0].payload["toolName"] == "Read config.txt"
         assert tool_completed[0].payload["ok"] is True
         assert tool_completed[0].payload["callId"] == "tc1"
+        assert tool_completed[0].payload["outputPreview"] == "port = 8080"
 
         # --- Text deltas ---
         text_deltas = [e for e in events if e.type == "agent.message.delta"]

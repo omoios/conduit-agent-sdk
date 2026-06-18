@@ -80,6 +80,7 @@ from conduit_sdk.redaction import (
     RedactionFilter,
     redact_events,
     redact_patterns,
+    redact_record,
 )
 from conduit_sdk.toolview import (
     ToolCall,
@@ -88,6 +89,28 @@ from conduit_sdk.toolview import (
     observe_turn,
     parse_tool_input,
     tool_output_text,
+)
+from conduit_sdk.events import (
+    AvailableCommands,
+    ConfigUpdate,
+    Done,
+    ModeChange,
+    Plan,
+    RateLimit,
+    SessionEvent,
+    SessionInfo,
+    StopReason,
+    TextDelta,
+    ThoughtDelta,
+    ToolCallStart,
+    ToolCallUpdate,
+    ToolKind,
+    ToolStatus,
+    Unknown,
+    Usage,
+    from_record,
+    normalize,
+    to_record,
 )
 from conduit_sdk.elicitation import (
     ElicitationAction,
@@ -147,7 +170,6 @@ from conduit_sdk.types import (
     PermissionRequest,
     PermissionResponse,
     PromptContent,
-    RateLimitInfo,
     ResourceLinkBlock,
     ResultMessage,
     SessionUpdate,
@@ -230,7 +252,29 @@ __all__ = [
     "RedactionFilter",
     "redact_events",
     "redact_patterns",
+    "redact_record",
     "DEFAULT_SECRET_PATTERNS",
+    # Canonical SessionEvent model (typed decode of SessionUpdate)
+    "SessionEvent",
+    "normalize",
+    "to_record",
+    "from_record",
+    "TextDelta",
+    "ThoughtDelta",
+    "ToolCallStart",
+    "ToolCallUpdate",
+    "Plan",
+    "AvailableCommands",
+    "ModeChange",
+    "ConfigUpdate",
+    "Usage",
+    "SessionInfo",
+    "RateLimit",
+    "Done",
+    "Unknown",
+    "ToolKind",
+    "ToolStatus",
+    "StopReason",
     # Tool-call observability (see agent file/terminal tool outputs)
     "ToolCall",
     "TurnResult",
@@ -268,8 +312,6 @@ __all__ = [
     "ResourceLinkBlock",
     "EmbeddedResourceBlock",
     "PromptContent",
-    # Types — rate limit
-    "RateLimitInfo",
     # Types — skill activation
     "SkillResult",
     # Agent enum

@@ -33,9 +33,9 @@ from conduit_sdk import (
     ElicitationResponse,
     HookType,
     Runner,
-    UpdateKind,
     acp_adapter,
 )
+from conduit_sdk.events import ThoughtDelta, TextDelta
 from conduit_sdk.runlayer import Agent
 from conduit_sdk.session_store import InMemorySessionStore
 from conduit_sdk.toolview import observe_turn
@@ -95,9 +95,9 @@ async def loopback_tour() -> None:
         banner("1 . Streaming — live deltas from the agent")
         sid = (await client.new_session()).session_id
         async for u in client.prompt_stream("read config", session_id=sid):
-            if u.kind == UpdateKind.ThoughtDelta:
+            if isinstance(u, ThoughtDelta):
                 print(f"   thought: {u.text}", flush=True)
-            elif u.kind == UpdateKind.TextDelta:
+            elif isinstance(u, TextDelta):
                 print(f"   text:    {u.text}", flush=True)
 
         banner("2 . Tool-output observability — observe_turn")
@@ -155,7 +155,7 @@ async def live_omp_tour() -> None:
             "In one short sentence, what is the Agent Client Protocol?",
             session_id=sid,
         ):
-            if u.kind == UpdateKind.TextDelta and u.text:
+            if isinstance(u, TextDelta) and u.text:
                 print(u.text, end="", flush=True)
         print(flush=True)
 

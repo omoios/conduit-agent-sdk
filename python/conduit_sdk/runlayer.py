@@ -227,41 +227,37 @@ def _build_mock_script(
 def acp_adapter(client: Any) -> Adapter:
     """Wrap a :class:`conduit_sdk.Client` as an :class:`Adapter`.
 
-    Calls ``client.prompt_stream(task)`` and normalises each
-    ``SessionUpdate`` into the event catalog (``run.started``,
-    ``agent.message.delta``, ``tool.started``, ``tool.completed``,
-    ``run.failed``, ``run.completed``, etc.).
-
-    Parameters
-    ----------
-    client:
-        An instance of :class:`conduit_sdk.Client` (or any object with a
-        ``prompt_stream`` method that returns ``SessionUpdate``-like values).
+    Consumes the canonical :class:`~conduit_sdk.events.SessionEvent` stream
+    from ``client.prompt_stream(task)`` and maps each event to the run-layer
+    catalog (``run.started``, ``agent.message.delta``, ``tool.started``,
+    ``tool.completed``, ``run.failed``, ``run.completed``, …). A terminal
+    ``ToolCallUpdate`` (status ``completed``/``failed``) becomes
+    ``tool.completed`` with ``ok``/``output``/``toolName`` (the title is
+    remembered from the preceding ``ToolCallStart``); a ``ConduitError`` raised
+    by the client becomes ``run.failed``.
     """
-    import json
-    from conduit_sdk._conduit_sdk import UpdateKind
+    from conduit_sdk.events import (
+        AvailableCommands,
+        ConfigUpdate,
+        Done,
+        ModeChange,
+        Plan,
+        RateLimit,
+        SessionInfo,
+        TextDelta,
+        ThoughtDelta,
+        ToolCallStart,
+        ToolCallUpdate,
+        ToolStatus,
+        Unknown,
+        Usage,
+        to_record,
+    )
+    from conduit_sdk.exceptions import ConduitError
 
-    # Cache enum integer values for fast dispatch.
-    # (Rust IntEnum is unhashable, so we store .value in sets.)
-    _DELTA_V = int(UpdateKind.TextDelta)
-    _THOUGHT_V = int(UpdateKind.ThoughtDelta)
-    _TOOL_START_V = int(UpdateKind.ToolUseStart)
-    _TOOL_END_V = int(UpdateKind.ToolUseEnd)
-    _USAGE_V = int(UpdateKind.Usage)
-    _DONE_V = int(UpdateKind.Done)
-    _ERROR_V = int(UpdateKind.Error)
-
-    # Group of "generic" kinds that map to ``agent.update``.
-    _GENERIC_VALUES = frozenset({
-        int(UpdateKind.ToolUseUpdate),
-        int(UpdateKind.ModeChange),
-        int(UpdateKind.Plan),
-        int(UpdateKind.ConfigUpdate),
-        int(UpdateKind.CommandsUpdate),
-        int(UpdateKind.SessionInfo),
-        int(UpdateKind.RateLimit),
-    })
-
+    # Variants that carry no dedicated catalog event → ``agent.update``.
+    _GENERIC = (Plan, AvailableCommands, ModeChange, ConfigUpdate,
+                SessionInfo, RateLimit, Usage, Unknown)
 
     class _AcpAdapter:
         name = "acp"
@@ -292,95 +288,49 @@ def acp_adapter(client: Any) -> Adapter:
             yield _ev("run.started", source="sdk")
 
             saw_terminal = False
-            async for update in client.prompt_stream(task):
-                kv = int(update.kind)  # int — Rust IntEnum has no .value
-
-                if kv == _DELTA_V:
-                    yield _ev("agent.message.delta",
-                              payload={"text": update.text or ""})
-
-                elif kv == _THOUGHT_V:
-                    yield _ev("agent.thought_summary",
-                              payload={"text": update.text or ""})
-
-                elif kv == _TOOL_START_V:
-                    payload: dict[str, Any] = {
-                        "toolName": update.tool_name or "",
-                    }
-                    if update.tool_use_id:
-                        payload["callId"] = update.tool_use_id
-                    if update.tool_input:
-                        try:
-                            payload["inputPreview"] = json.loads(
-                                update.tool_input
-                            )
-                        except (TypeError, ValueError):
-                            payload["inputPreview"] = update.tool_input
-                    yield _ev("tool.started", payload=payload)
-
-                elif kv == _TOOL_END_V:
-                    ok = True
-                    if update.tool_status == "error":
-                        ok = False
-                    elif update.tool_status == "success":
-                        ok = True
-                    payload = {
-                        "toolName": update.tool_name or "",
-                        "ok": ok,
-                    }
-                    if update.tool_use_id:
-                        payload["callId"] = update.tool_use_id
-                    if update.tool_content:
-                        try:
-                            payload["outputPreview"] = json.loads(
-                                update.tool_content
-                            )
-                        except (TypeError, ValueError):
-                            payload["outputPreview"] = update.tool_content
-                    yield _ev("tool.completed", payload=payload)
-
-                elif kv == _USAGE_V:
-                    pl: dict[str, Any] = {}
-                    if update.usage_json:
-                        try:
-                            pl = json.loads(update.usage_json)
-                        except (TypeError, ValueError):
-                            pl = {"raw": update.usage_json}
-                    yield _ev("agent.usage", payload=pl)
-
-                elif kv == _ERROR_V:
-                    saw_terminal = True
-                    yield _ev("run.failed", payload={
-                        "code": "agent_error",
-                        "message": update.error or "Unknown agent error",
-                        "retryable": False,
-                    })
-
-                elif kv == _DONE_V:
-                    saw_terminal = True
-                    yield _ev("run.completed")
-
-                elif kv in _GENERIC_VALUES:
-                    raw: dict[str, Any] = {
-                        "kind": str(update.kind).rsplit(".", maxsplit=1)[-1],
-                    }
-                    if update.text:
-                        raw["text"] = update.text
-                    if update.tool_name:
-                        raw["toolName"] = update.tool_name
-                    if update.error:
-                        raw["error"] = update.error
-                    yield _ev("agent.update", payload=raw)
-
-                else:
-                    raw = {"kind": str(update.kind)}
-                    if update.text:
-                        raw["text"] = update.text
-                    if update.tool_name:
-                        raw["toolName"] = update.tool_name
-                    if update.error:
-                        raw["error"] = update.error
-                    yield _ev("agent.update", payload=raw)
+            tool_titles: dict[str, str] = {}  # id -> title (filled at ToolCallStart)
+            try:
+                async for event in client.prompt_stream(task):
+                    if isinstance(event, TextDelta):
+                        yield _ev("agent.message.delta",
+                                  payload={"text": event.text})
+                    elif isinstance(event, ThoughtDelta):
+                        yield _ev("agent.thought_summary",
+                                  payload={"text": event.text})
+                    elif isinstance(event, ToolCallStart):
+                        tool_titles[event.tool_use_id] = event.title
+                        payload: dict[str, Any] = {"toolName": event.title}
+                        if event.tool_use_id:
+                            payload["callId"] = event.tool_use_id
+                        payload["inputPreview"] = event.input
+                        yield _ev("tool.started", payload=payload)
+                    elif isinstance(event, ToolCallUpdate):
+                        if event.status in (ToolStatus.COMPLETED, ToolStatus.FAILED):
+                            payload = {
+                                "toolName": tool_titles.get(event.tool_use_id, ""),
+                                "ok": event.status == ToolStatus.COMPLETED,
+                            }
+                            if event.tool_use_id:
+                                payload["callId"] = event.tool_use_id
+                            if event.output:
+                                payload["outputPreview"] = event.output
+                            yield _ev("tool.completed", payload=payload)
+                        else:
+                            yield _ev("agent.update", payload=to_record(event))
+                    elif isinstance(event, Done):
+                        saw_terminal = True
+                        yield _ev("run.completed")
+                    elif isinstance(event, _GENERIC):
+                        yield _ev("agent.update", payload=to_record(event))
+                    else:
+                        yield _ev("agent.update", payload=to_record(event))
+            except ConduitError as exc:
+                saw_terminal = True
+                yield _ev("run.failed", payload={
+                    "code": "agent_error",
+                    "message": str(exc),
+                    "retryable": False,
+                })
 
             # Stream ended without a terminal event → emit completed.
             if not saw_terminal:

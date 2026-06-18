@@ -119,20 +119,22 @@ def _fallback_id(index: int) -> str:
     return f"__tool_{index}"
 
 
-def collect_tool_calls(updates: Iterable[Any]) -> tuple[str, list[ToolCall]]:
-    """Group a turn's :class:`SessionUpdate` stream into ``(text, tool_calls)``.
+def collect_tool_calls(events: Iterable[Any]) -> tuple[str, list[ToolCall]]:
+    """Group a turn's :class:`SessionEvent` stream into ``(text, tool_calls)``.
 
-    Tool events are matched by ``tool_use_id``: a ``ToolUseStart`` opens a
-    :class:`ToolCall` (name/input/kind), subsequent ``ToolUseUpdate`` events
-    fill in the parsed output + status, and ``ToolUseEnd`` finalizes it.
-    ``TextDelta`` events are concatenated into the returned text.
+    Tool calls are matched by ``tool_use_id``: a ``ToolCallStart`` opens a
+    :class:`ToolCall` (name/input/kind/status); subsequent ``ToolCallUpdate``
+    events fill in the decoded output + terminal status. ``TextDelta`` events
+    are concatenated into the returned text.
     """
+    from conduit_sdk.events import TextDelta, ToolCallStart, ToolCallUpdate
+
     text_parts: list[str] = []
     calls: list[ToolCall] = []
     by_id: dict[str, ToolCall] = {}
 
-    def _bucket(u: Any) -> ToolCall:
-        tid = getattr(u, "tool_use_id", None) or _fallback_id(len(calls))
+    def _bucket(tool_use_id: str | None) -> ToolCall:
+        tid = tool_use_id or _fallback_id(len(calls))
         tc = by_id.get(tid)
         if tc is None:
             tc = ToolCall(tool_use_id=tid)
@@ -140,36 +142,29 @@ def collect_tool_calls(updates: Iterable[Any]) -> tuple[str, list[ToolCall]]:
             calls.append(tc)
         return tc
 
-    for u in updates:
-        kind = getattr(u, "kind", None)
-        if kind == UpdateKind.TextDelta:
-            t = getattr(u, "text", None)
-            if t:
-                text_parts.append(t)
-        elif kind == UpdateKind.ToolUseStart:
-            tc = _bucket(u)
-            tc.name = getattr(u, "tool_name", None) or tc.name
-            tc.kind = getattr(u, "tool_kind", None) or tc.kind
-            tc.status = getattr(u, "tool_status", None) or tc.status
-            if getattr(u, "tool_input", None):
-                tc.input = parse_tool_input(u.tool_input)
-            if getattr(u, "tool_content", None):
-                decoded = tool_output_text(u.tool_content)
-                if decoded:
-                    tc.output = decoded
-        elif kind == UpdateKind.ToolUseUpdate:
-            tc = _bucket(u)
-            if getattr(u, "tool_status", None):
-                tc.status = u.tool_status
-            if getattr(u, "tool_content", None):
-                decoded = tool_output_text(u.tool_content)
-                if decoded:
-                    # Updates may arrive incrementally; keep the richest seen.
-                    tc.output = decoded
-        elif kind == UpdateKind.ToolUseEnd:
-            tc = _bucket(u)
-            if getattr(u, "tool_status", None):
-                tc.status = u.tool_status
+    def _enum_str(value: Any) -> str:
+        return value.value if hasattr(value, "value") else str(value)
+
+    for event in events:
+        if isinstance(event, TextDelta):
+            if event.text:
+                text_parts.append(event.text)
+        elif isinstance(event, ToolCallStart):
+            tc = _bucket(event.tool_use_id)
+            tc.name = event.title or tc.name
+            if event.kind is not None:
+                tc.kind = _enum_str(event.kind)
+            if event.status is not None:
+                tc.status = _enum_str(event.status)
+            if event.input is not None:
+                tc.input = event.input
+        elif isinstance(event, ToolCallUpdate):
+            tc = _bucket(event.tool_use_id)
+            if event.status is not None:
+                tc.status = _enum_str(event.status)
+            if event.output:
+                # Updates may arrive incrementally; keep the richest seen.
+                tc.output = event.output
 
     return "".join(text_parts), calls
 

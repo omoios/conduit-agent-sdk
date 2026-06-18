@@ -26,15 +26,28 @@ from typing import Any
 
 from conduit_sdk._conduit_sdk import (
     ClientConfig,
+    ContentBlock,
+    ContentType,
+    MessageRole,
     RustClient,
     RustControlProtocol,
-    SessionUpdate,
-    UpdateKind,
+)
+from conduit_sdk.events import (
+    Done,
+    SessionEvent,
+    TextDelta,
+    ToolCallStart,
+    ToolCallUpdate,
+    ToolStatus,
+    from_record,
+    normalize,
+    to_record,
 )
 from conduit_sdk.exceptions import ConnectionError, HookBlockedError
 from conduit_sdk.hooks import HookRunner, HookType
 from conduit_sdk.options import AgentOptions
 from conduit_sdk.query import Query
+from conduit_sdk.redaction import redact_record
 from conduit_sdk.registry import Registry
 from conduit_sdk.session import Session
 from conduit_sdk.types import Capabilities, HookContext, Message
@@ -305,14 +318,111 @@ class Client:
         )
         return self._default_session_id
 
+    async def prompt_stream(
+        self,
+        text: str | list,
+        *,
+        session_id: str | None = None,
+    ) -> AsyncIterator[SessionEvent]:
+        """Send a prompt and yield real-time, canonical :class:`SessionEvent` objects.
+
+        Each event is the typed decode of one Rust ``SessionUpdate`` — text and
+        thought deltas, tool-call start/update, plan, usage, mode/config changes
+        — ending in a terminal ``Done``. When
+        :attr:`AgentOptions.redaction_filter` is set, secrets are scrubbed
+        *before* the event is yielded or persisted. Lifecycle hooks
+        (PreToolUse / PostToolUse / Stop) fire here, so every prompt path
+        shares them.
+        ----------
+        text:
+            The prompt text (string) or a list of content blocks.
+        session_id:
+            Optional session ID. If ``None``, uses the client's default
+            session (auto-created on first prompt).
+        """
+        if not self._connected:
+            raise ConnectionError("client is not connected \u2014 call connect() first")
+        if session_id is None:
+            session_id = await self._ensure_default_session()
+        text = await self._on_prompt_submit(text, session_id)
+        text_str, content_json = self._prepare_prompt(text)
+        async for event in self._stream_events(session_id, text_str, content_json):
+            yield event
+
+    async def _stream_events(
+        self,
+        session_id: str,
+        text_str: str,
+        content_json: str | None,
+    ) -> AsyncIterator[SessionEvent]:
+        """Core event loop shared by :meth:`prompt_stream` and :meth:`prompt`.
+
+        Sends the prompt, then drains Rust ``SessionUpdate`` objects, decoding
+        each via :func:`~conduit_sdk.events.normalize`, applying redaction,
+        persisting the canonical record, and dispatching lifecycle hooks.
+        ``PromptSubmit`` is deliberately NOT fired here — the public entry
+        points own that, avoiding double dispatch.
+        """
+        store = self._options.session_store if self._options else None
+        red_filter = self._options.redaction_filter if self._options else None
+        await self._rust_client.send_prompt(text_str, session_id, content_json)
+        while True:
+            update = await self._rust_client.recv_update()
+            if update is None:
+                break
+            event = normalize(update)
+            record = to_record(event)
+            if red_filter is not None:
+                record = redact_record(record, red_filter)
+                event = from_record(record)
+            yield event
+            if store is not None:
+                await store.append_update(session_id, record)
+            # Lifecycle hooks keyed off the typed event.
+            if isinstance(event, ToolCallStart):
+                raw_input = event.input
+                tool_input = (
+                    json.dumps(raw_input)
+                    if isinstance(raw_input, (dict, list))
+                    else (raw_input or "")
+                )
+                await self._dispatch_hook(
+                    HookType.PreToolUse,
+                    tool_name=event.title,
+                    tool_input=tool_input,
+                    tool_use_id=event.tool_use_id,
+                )
+            elif isinstance(event, ToolCallUpdate) and event.status in (
+                ToolStatus.COMPLETED,
+                ToolStatus.FAILED,
+            ):
+                await self._dispatch_hook(
+                    HookType.PostToolUse,
+                    tool_use_id=event.tool_use_id,
+                    tool_status=event.status.value,
+                    tool_output=event.output,
+                )
+            elif isinstance(event, Done):
+                await self._dispatch_hook(
+                    HookType.Stop,
+                    stop_reason=(
+                        event.stop_reason.value if event.stop_reason else None
+                    ),
+                )
+                break
+
     async def prompt(
         self,
         text: str | list,
         *,
         session_id: str | None = None,
     ) -> AsyncIterator[Message]:
-        """Send a prompt to the agent and stream back response messages.
-        message contains the text received so far (not deltas).
+        """Send a prompt and stream back response messages.
+
+        Consumes :meth:`prompt_stream` and folds the turn into one assistant
+        :class:`Message` (joined ``TextDelta`` text; thoughts are not folded
+        in). Hooks, persistence, and redaction fire identically to
+        :meth:`prompt_stream`.
         ----------
         text:
             The prompt text (string) or a list of content blocks
@@ -328,87 +438,29 @@ class Client:
             session_id = await self._ensure_default_session()
         text = await self._on_prompt_submit(text, session_id)
         text_str, content_json = self._prepare_prompt(text)
-        messages = await self._rust_client.prompt(text_str, session_id, content_json)
-        for msg in messages:
-            yield msg
-
-    async def prompt_stream(
-        self,
-        text: str | list,
-        *,
-        session_id: str | None = None,
-    ) -> AsyncIterator[SessionUpdate]:
-        """Send a prompt and yield real-time :class:`SessionUpdate` objects.
-        (text deltas, thought deltas, tool use start/end) as it arrives.
-        ----------
-        text:
-            The prompt text (string) or a list of content blocks.
-        session_id:
-            Optional session ID. If ``None``, uses the client's default
-            session (auto-created on first prompt).
-        """
-        if not self._connected:
-            raise ConnectionError("client is not connected \u2014 call connect() first")
-        if session_id is None:
-            session_id = await self._ensure_default_session()
-        text = await self._on_prompt_submit(text, session_id)
-        text_str, content_json = self._prepare_prompt(text)
-        store = self._options.session_store if self._options else None
-        await self._rust_client.send_prompt(text_str, session_id, content_json)
-        while True:
-            update = await self._rust_client.recv_update()
-            if update is None:
-                break
-            yield update
-            if store is not None:
-                await store.append_update(session_id, self._record_update(update))
-            kind = update.kind
-            if kind == UpdateKind.ToolUseStart:
-                await self._dispatch_hook(
-                    HookType.PreToolUse,
-                    tool_name=update.tool_name,
-                    tool_input=update.tool_input,
-                    tool_use_id=update.tool_use_id,
+        parts: list[str] = []
+        stop_reason: str | None = None
+        async for event in self._stream_events(session_id, text_str, content_json):
+            if isinstance(event, TextDelta):
+                parts.append(event.text)
+            elif isinstance(event, Done):
+                stop_reason = (
+                    event.stop_reason.value if event.stop_reason else None
                 )
-            elif kind == UpdateKind.ToolUseEnd:
-                await self._dispatch_hook(
-                    HookType.PostToolUse,
-                    tool_use_id=update.tool_use_id,
-                    tool_status=update.tool_status,
-                )
-            elif kind == UpdateKind.Done:
-                # A Done update is terminal — the agent's turn has ended.
-                await self._dispatch_hook(HookType.Stop, stop_reason=update.stop_reason)
-                break
+        body = "".join(parts)
+        if body:
+            yield Message(
+                role=MessageRole.Assistant,
+                content=[ContentBlock(ContentType.Text, text=body)],
+                session_id=session_id,
+                stop_reason=stop_reason,
+            )
 
     async def prompt_sync(
         self, text: str | list, *, session_id: str | None = None
     ) -> list[Message]:
         """Send a prompt and collect all response messages (non-streaming)."""
         return [msg async for msg in self.prompt(text, session_id=session_id)]
-
-    @staticmethod
-    def _record_update(update: SessionUpdate) -> dict[str, Any]:
-        """Serialize a streaming ``SessionUpdate`` into a JSON-safe store record."""
-        record: dict[str, Any] = {"kind": str(update.kind)}
-        for attr in (
-            "text", "tool_name", "tool_use_id", "tool_kind",
-            "tool_status", "tool_input", "stop_reason", "mode_id",
-        ):
-            value = getattr(update, attr, None)
-            if value is not None:
-                record[attr] = value if isinstance(value, (str, int, float, bool)) else str(value)
-        for attr in (
-            "commands_json", "config_json", "plan_json", "usage_json",
-            "rate_limit_json", "session_info_json",
-        ):
-            value = getattr(update, attr, None)
-            if value:
-                try:
-                    record[attr] = json.loads(value)
-                except (TypeError, ValueError):
-                    record[attr] = value
-        return record
 
     # -- Skill activation ---------------------------------------------------
 

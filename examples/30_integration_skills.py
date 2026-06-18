@@ -19,7 +19,7 @@ import sys
 import time
 
 from conduit_sdk import Agent, Client, SkillResult
-from conduit_sdk._conduit_sdk import UpdateKind
+from conduit_sdk.events import AvailableCommands, TextDelta, Done
 
 
 async def main() -> None:
@@ -49,12 +49,12 @@ async def main() -> None:
         discovered_commands: list[dict] = []
         text_response = []
 
-        async for update in client.prompt_stream("Say hi in one sentence."):
-            if update.kind == UpdateKind.CommandsUpdate and update.commands_json:
-                discovered_commands = json.loads(update.commands_json)
-            elif update.kind == UpdateKind.TextDelta and update.text:
-                text_response.append(update.text)
-            elif update.kind == UpdateKind.Done:
+        async for event in client.prompt_stream("Say hi in one sentence."):
+            if isinstance(event, AvailableCommands) and event.commands:
+                discovered_commands = event.commands
+            elif isinstance(event, TextDelta) and event.text:
+                text_response.append(event.text)
+            elif isinstance(event, Done):
                 break
 
         greeting = "".join(text_response).strip()

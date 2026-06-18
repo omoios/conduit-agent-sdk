@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from conduit_sdk import SessionUpdate, UpdateKind
+from conduit_sdk.events import (
+    TextDelta,
+    ToolCallStart,
+    ToolCallUpdate,
+    ToolKind,
+    ToolStatus,
+)
 from conduit_sdk.toolview import (
     TurnResult,
     collect_tool_calls,
@@ -70,19 +76,15 @@ def _content(text: str) -> str:
 class TestCollectToolCalls:
     def test_groups_two_tools_by_id(self):
         updates = [
-            SessionUpdate(UpdateKind.ToolUseStart, tool_use_id="t1",
-                          tool_name="read_file", tool_kind="Read",
-                          tool_input='{"path":"a.txt"}', tool_status="Pending"),
-            SessionUpdate(UpdateKind.ToolUseStart, tool_use_id="t2",
-                          tool_name="$ ls", tool_kind="Bash",
-                          tool_input='{"command":"ls"}', tool_status="Pending"),
-            SessionUpdate(UpdateKind.ToolUseUpdate, tool_use_id="t1",
-                          tool_content=_content("contents of a"), tool_status="Completed"),
-            SessionUpdate(UpdateKind.ToolUseUpdate, tool_use_id="t2",
-                          tool_content=_content("file1\nfile2"), tool_status="Completed"),
-            SessionUpdate(UpdateKind.ToolUseEnd, tool_use_id="t1", tool_status="Completed"),
-            SessionUpdate(UpdateKind.ToolUseEnd, tool_use_id="t2", tool_status="Completed"),
-            SessionUpdate(UpdateKind.TextDelta, text="all done"),
+            ToolCallStart(tool_use_id="t1", title="read_file", kind=ToolKind.READ,
+                          input={"path": "a.txt"}, status=ToolStatus.PENDING),
+            ToolCallStart(tool_use_id="t2", title="$ ls", kind=ToolKind.EXECUTE,
+                          input={"command": "ls"}, status=ToolStatus.PENDING),
+            ToolCallUpdate(tool_use_id="t1", status=ToolStatus.COMPLETED,
+                           output="contents of a", raw_content=None, locations=None),
+            ToolCallUpdate(tool_use_id="t2", status=ToolStatus.COMPLETED,
+                           output="file1\nfile2", raw_content=None, locations=None),
+            TextDelta(text="all done"),
         ]
         text, calls = collect_tool_calls(updates)
 
@@ -92,15 +94,15 @@ class TestCollectToolCalls:
         assert by_id["t1"].name == "read_file"
         assert by_id["t1"].input == {"path": "a.txt"}
         assert by_id["t1"].output == "contents of a"
-        assert by_id["t1"].status == "Completed"
+        assert by_id["t1"].status == "completed"
         assert by_id["t2"].name == "$ ls"
         assert by_id["t2"].output == "file1\nfile2"
 
     def test_update_without_start_still_grouped(self):
         # An update arriving with no prior Start (defensive) still produces a call.
         updates = [
-            SessionUpdate(UpdateKind.ToolUseUpdate, tool_use_id="x",
-                          tool_content=_content("late output"), tool_status="Completed"),
+            ToolCallUpdate(tool_use_id="x", status=ToolStatus.COMPLETED,
+                           output="late output", raw_content=None, locations=None),
         ]
         _, calls = collect_tool_calls(updates)
         assert len(calls) == 1
@@ -108,9 +110,10 @@ class TestCollectToolCalls:
 
     def test_interleaved_text_and_tools_preserve_text_order(self):
         updates = [
-            SessionUpdate(UpdateKind.TextDelta, text="A"),
-            SessionUpdate(UpdateKind.ToolUseStart, tool_use_id="t", tool_name="r"),
-            SessionUpdate(UpdateKind.TextDelta, text="B"),
+            TextDelta(text="A"),
+            ToolCallStart(tool_use_id="t", title="r", kind=None,
+                          input=None, status=None),
+            TextDelta(text="B"),
         ]
         text, calls = collect_tool_calls(updates)
         assert text == "AB"
@@ -134,12 +137,11 @@ class _FakeClient:
 @pytest.mark.asyncio
 async def test_observe_turn_returns_text_and_tool_calls():
     updates = [
-        SessionUpdate(UpdateKind.ToolUseStart, tool_use_id="t1", tool_name="read_file",
-                      tool_input='{"path":"m.toml"}'),
-        SessionUpdate(UpdateKind.ToolUseUpdate, tool_use_id="t1",
-                      tool_content=_content("name = 'x'"), tool_status="Completed"),
-        SessionUpdate(UpdateKind.ToolUseEnd, tool_use_id="t1", tool_status="Completed"),
-        SessionUpdate(UpdateKind.TextDelta, text="done"),
+        ToolCallStart(tool_use_id="t1", title="read_file", kind=ToolKind.READ,
+                      input={"path": "m.toml"}, status=None),
+        ToolCallUpdate(tool_use_id="t1", status=ToolStatus.COMPLETED,
+                       output="name = 'x'", raw_content=None, locations=None),
+        TextDelta(text="done"),
     ]
     client = _FakeClient(updates)
     turn = await observe_turn(client, "read it", session_id="s1")

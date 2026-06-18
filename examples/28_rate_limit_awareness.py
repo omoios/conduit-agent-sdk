@@ -4,9 +4,8 @@
 Demonstrates how to detect and react to rate-limit extension
 notifications that some ACP agents (e.g. Claude) emit during a session.
 
-The ``UpdateKind.RateLimit`` event carries a JSON payload with
-utilization data that you can parse into a ``RateLimitInfo`` object
-for structured access.
+The ``RateLimit`` SessionEvent carries structured fields
+for direct access.
 
 Usage:
     uv run examples/28_rate_limit_awareness.py
@@ -18,7 +17,8 @@ import asyncio
 import os
 import sys
 
-from conduit_sdk import Client, RateLimitInfo, UpdateKind
+from conduit_sdk import Client
+from conduit_sdk.events import TextDelta, RateLimit, Done
 
 
 async def main() -> None:
@@ -29,36 +29,27 @@ async def main() -> None:
         session = await client.new_session()
         print(f"Session: {session.session_id}")
 
-        # Send a prompt and watch for rate-limit events alongside normal output.
-        await client.prompt_stream(
-            "Write a short haiku about code.",
-            session_id=session.session_id,
-        )
-
         text_parts: list[str] = []
 
-        while True:
-            update = await client.recv_update()
-            if update is None:
-                break
+        async for event in client.prompt_stream(
+            "Write a short haiku about code.",
+            session_id=session.session_id,
+        ):
+            if isinstance(event, TextDelta):
+                text_parts.append(event.text or "")
+                print(event.text or "", end="", flush=True)
 
-            if update.kind == UpdateKind.TextDelta:
-                text_parts.append(update.text or "")
-                print(update.text or "", end="", flush=True)
-
-            elif update.kind == UpdateKind.RateLimit:
-                # Parse the structured rate-limit info.
-                info = RateLimitInfo.from_json(update.rate_limit_json or "{}")
+            elif isinstance(event, RateLimit):
                 print(f"\n⚠️  Rate limit event:")
-                print(f"   Status:      {info.status}")
-                print(f"   Utilization: {info.utilization:.0%}")
-                print(f"   Type:        {info.rate_limit_type}")
-                print(f"   Resets at:   {info.resets_at}")
-                if info.utilization >= 0.9:
+                print(f"   Status:      {event.status}")
+                print(f"   Utilization: {event.utilization:.0%}")
+                print(f"   Type:        {event.rate_limit_type}")
+                print(f"   Resets at:   {event.resets_at}")
+                if event.utilization >= 0.9:
                     print("   🚨 WARNING: Very close to rate limit!")
 
-            elif update.kind == UpdateKind.Done:
-                print(f"\n--- Done (stop_reason={update.stop_reason}) ---")
+            elif isinstance(event, Done):
+                print(f"\n--- Done (stop_reason={event.stop_reason}) ---")
                 break
 
         if text_parts:

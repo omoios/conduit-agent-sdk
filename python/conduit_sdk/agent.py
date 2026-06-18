@@ -96,6 +96,102 @@ class AgentContext:
             }
         )
 
+    async def tool_call(
+        self,
+        tool_use_id: str,
+        title: str,
+        kind: str = "other",
+        raw_input: Any = None,
+        status: str = "pending",
+    ) -> None:
+        """Emit a ``tool_call`` session update (tool-start ACP event).
+
+        Args:
+            tool_use_id: Unique identifier for this tool invocation.
+            title: Human-readable tool name/title.
+            kind: ACP ``ToolKind`` value (e.g. ``"read"``, ``"search"``, ``"other"``).
+            raw_input: Arbitrary JSON-serialisable input the tool received.
+            status: Tool lifecycle status (``"pending"``, ``"in_progress"``, etc.).
+        """
+        await self.send_update(
+            {
+                "sessionUpdate": "tool_call",
+                "toolCallId": tool_use_id,
+                "title": title,
+                "kind": kind,
+                "status": status,
+                "rawInput": raw_input,
+            }
+        )
+
+    async def tool_result(
+        self,
+        tool_use_id: str,
+        status: str,
+        output: str | None = None,
+        locations: list | None = None,
+    ) -> None:
+        """Emit a ``tool_call_update`` session update (tool-result ACP event).
+
+        Args:
+            tool_use_id: Must match the id passed to the corresponding
+                :meth:`tool_call`.
+            status: Result status (``"completed"``, ``"failed"``, etc.).
+            output: Text output for the tool result content block.
+            locations: Optional list of file-system location dicts.
+        """
+        d: dict[str, Any] = {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": tool_use_id,
+            "status": status,
+        }
+        if output is not None:
+            d["content"] = [
+                {"type": "content", "content": {"type": "text", "text": output}}
+            ]
+        if locations is not None:
+            d["locations"] = locations
+        await self.send_update(d)
+
+    async def plan(self, entries: list) -> None:
+        """Emit a ``plan`` session update.
+
+        Args:
+            entries: A list of plan-entry dicts (each typically has
+                ``"goal"``, ``"status"``, ``"subtext"``, etc.).
+        """
+        await self.send_update(
+            {"sessionUpdate": "plan", "entries": entries}
+        )
+
+    async def usage(self, used: int | None = None, size: int | None = None) -> None:
+        """Emit a ``usage`` session update.
+
+        Args:
+            used: Number of tokens / units used (default 0).
+            size: Total size / limit (default 0).
+        """
+        await self.send_update(
+            {
+                "sessionUpdate": "usage_update",
+                "used": used if used is not None else 0,
+                "size": size if size is not None else 0,
+            }
+        )
+
+    async def mode_change(self, mode_id: str) -> None:
+        """Emit a ``current_mode_update`` session update to switch modes.
+
+        Args:
+            mode_id: The new mode identifier (e.g. ``"build"``, ``"chat"``).
+        """
+        await self.send_update(
+            {
+                "sessionUpdate": "current_mode_update",
+                "currentModeId": mode_id,
+            }
+        )
+
     async def send_update(self, update: dict[str, Any]) -> None:
         """Send an arbitrary session update dict.
 

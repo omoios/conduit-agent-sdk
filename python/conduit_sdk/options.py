@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable
 if TYPE_CHECKING:
     from conduit_sdk.elicitation import ElicitationHandler
+    from conduit_sdk.redaction import RedactionFilter
     from conduit_sdk.session_store import SessionStore
 
 
@@ -67,6 +68,7 @@ class AgentOptions:
     hooks: dict | None = None
     session_store: SessionStore | None = None
     elicitation_handler: ElicitationHandler | None = None
+    redaction_filter: RedactionFilter | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize non-None fields to a dict for the control protocol."""

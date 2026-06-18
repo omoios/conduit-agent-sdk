@@ -4,7 +4,7 @@
 # ///
 """23 — Streaming Updates: Stream all update types from the agent.
 
-Demonstrates prompt_stream() and inspecting each SessionUpdate's kind field
+Demonstrates prompt_stream() and inspecting each SessionEvent variant
 to handle Text, Thought, ToolUseUpdate, ModeChange, Plan, ConfigUpdate,
 Usage, SessionInfo, CommandsUpdate, and Done updates.
 
@@ -14,7 +14,7 @@ Usage, SessionInfo, CommandsUpdate, and Done updates.
 import asyncio
 
 from conduit_sdk import Client, AgentOptions
-from conduit_sdk._conduit_sdk import UpdateKind
+from conduit_sdk.events import TextDelta, ThoughtDelta, ToolCallUpdate, ModeChange, Plan, ConfigUpdate, Usage, SessionInfo, AvailableCommands, Done
 
 
 async def main():
@@ -25,29 +25,27 @@ async def main():
     async with client:
         print("Streaming updates for a prompt...\n")
 
-        async for update in client.prompt_stream("Write a haiku about Python."):
-            kind = update.kind
-
-            if kind == UpdateKind.Text:
-                print(f"[Text] {update.text}", end="")
-            elif kind == UpdateKind.Thought:
-                print(f"[Thought] {update.text}")
-            elif kind == UpdateKind.ToolUseUpdate:
-                print(f"[ToolUse] status={update.tool_status}, kind={update.tool_kind}")
-            elif kind == UpdateKind.ModeChange:
-                print(f"[ModeChange] mode_id={update.mode_id}")
-            elif kind == UpdateKind.Plan:
-                print(f"[Plan] {update.plan_json}")
-            elif kind == UpdateKind.ConfigUpdate:
-                print(f"[ConfigUpdate] {update.config_json}")
-            elif kind == UpdateKind.Usage:
-                print(f"[Usage] {update.usage_json}")
-            elif kind == UpdateKind.SessionInfo:
-                print(f"[SessionInfo] {update.session_info_json}")
-            elif kind == UpdateKind.CommandsUpdate:
-                print(f"[Commands] {update.commands_json}")
-            elif kind == UpdateKind.Done:
-                print(f"\n[Done] stop_reason={update.stop_reason}")
+        async for event in client.prompt_stream("Write a haiku about Python."):
+            if isinstance(event, TextDelta):
+                print(f"[Text] {event.text}", end="")
+            elif isinstance(event, ThoughtDelta):
+                print(f"[Thought] {event.text}")
+            elif isinstance(event, ToolCallUpdate):
+                print(f"[ToolUse] status={event.status}, output={event.output}" if event.output else f"[ToolUse] status={event.status}")
+            elif isinstance(event, ModeChange):
+                print(f"[ModeChange] mode_id={event.mode_id}")
+            elif isinstance(event, Plan):
+                print(f"[Plan] {event.entries}")
+            elif isinstance(event, ConfigUpdate):
+                print(f"[ConfigUpdate] {event.config}")
+            elif isinstance(event, Usage):
+                print(f"[Usage] used={event.used}, size={event.size}")
+            elif isinstance(event, SessionInfo):
+                print(f"[SessionInfo] title={event.title}")
+            elif isinstance(event, AvailableCommands):
+                print(f"[Commands] {event.commands}")
+            elif isinstance(event, Done):
+                print(f"\n[Done] stop_reason={event.stop_reason}")
 
         print("\nStreaming complete.")
 

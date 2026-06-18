@@ -17,10 +17,9 @@ notifications during streaming.
 """
 
 import asyncio
-import json
 
 from conduit_sdk import Client
-from conduit_sdk._conduit_sdk import UpdateKind
+from conduit_sdk.events import AvailableCommands, TextDelta, Done
 
 
 async def discover_commands(client: Client) -> list[dict]:
@@ -31,12 +30,12 @@ async def discover_commands(client: Client) -> list[dict]:
     """
     commands: list[dict] = []
 
-    async for update in client.prompt_stream("What commands do you have?"):
-        if update.kind == UpdateKind.CommandsUpdate and update.commands_json:
-            commands = json.loads(update.commands_json)
-        elif update.kind == UpdateKind.TextDelta:
+    async for event in client.prompt_stream("What commands do you have?"):
+        if isinstance(event, AvailableCommands) and event.commands:
+            commands = event.commands
+        elif isinstance(event, TextDelta):
             pass  # Ignore text for discovery
-        elif update.kind == UpdateKind.Done:
+        elif isinstance(event, Done):
             break
 
     return commands
@@ -50,10 +49,10 @@ async def activate_skill(client: Client, command: str) -> str:
     """
     collected: list[str] = []
 
-    async for update in client.prompt_stream(command):
-        if update.kind == UpdateKind.TextDelta:
-            collected.append(update.text or "")
-        elif update.kind == UpdateKind.Done:
+    async for event in client.prompt_stream(command):
+        if isinstance(event, TextDelta):
+            collected.append(event.text or "")
+        elif isinstance(event, Done):
             break
 
     return "".join(collected)

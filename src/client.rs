@@ -13,7 +13,7 @@
 use crate::error::ConduitError;
 use crate::transport::AgentProcess;
 use crate::types::{
-    Capabilities, ClientConfig, ContentBlock, ContentType, Message, MessageRole, SessionUpdate,
+    Capabilities, ClientConfig, SessionUpdate,
     UpdateKind,
 };
 use pyo3::prelude::*;
@@ -23,7 +23,7 @@ use agent_client_protocol::schema::{
     PermissionOptionKind, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SelectedPermissionOutcome,
     SessionNotification, SetSessionModeRequest,
-    SessionUpdate as AcpSessionUpdate, ToolCallStatus,
+    SessionUpdate as AcpSessionUpdate,
 };
 use agent_client_protocol::{Client, ConnectionTo, Agent, Responder, UntypedMessage};
 use agent_client_protocol::schema::{
@@ -94,6 +94,15 @@ enum AcpCommand {
     Shutdown,
 }
 
+/// Serialize a serde value to its wire string (e.g. `ToolKind::Read` → `"read"`,
+/// `StopReason::EndTurn` → `"end_turn"`). Falls back to the `Debug` form if the
+/// serialized value is not a string.
+fn serde_wire_str<T: serde::Serialize + std::fmt::Debug>(v: &T) -> String {
+    serde_json::to_value(v)
+        .ok()
+        .and_then(|val| val.as_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| format!("{:?}", v))
+}
 /// Streaming events pushed from the notification handler to the prompt collector.
 #[derive(Debug)]
 enum StreamEvent {
@@ -111,9 +120,6 @@ enum StreamEvent {
         tool_status: Option<String>,
         tool_content: Option<String>,
         tool_locations: Option<String>,
-    },
-    ToolUseEnd {
-        tool_use_id: String,
     },
     ModeChange {
         mode_id: String,
@@ -286,8 +292,8 @@ impl RustClient {
                                     .map(|v| v.to_string())
                                     .unwrap_or_default();
                                 let tool_use_id = tc.tool_call_id.0.to_string();
-                                let tool_kind = Some(format!("{:?}", tc.kind));
-                                let tool_status = Some(format!("{:?}", tc.status));
+                                let tool_kind = Some(serde_wire_str(&tc.kind));
+                                let tool_status = Some(serde_wire_str(&tc.status));
                                 let _ = notif_tx
                                     .send(StreamEvent::ToolUseStart {
                                         tool_name,
@@ -300,31 +306,22 @@ impl RustClient {
                             }
                             AcpSessionUpdate::ToolCallUpdate(tcu) => {
                                 let tool_use_id = tcu.tool_call_id.0.to_string();
-                                let tool_status = tcu.fields.status.as_ref().map(|s| format!("{:?}", s));
+                                let tool_status = tcu.fields.status.as_ref().map(serde_wire_str);
                                 let tool_content = tcu.fields.content.as_ref()
                                     .and_then(|c| serde_json::to_string(c).ok());
                                 let tool_locations = tcu.fields.locations.as_ref()
                                     .and_then(|l| serde_json::to_string(l).ok());
 
-                                // Send rich update event
+                                // A single terminal ToolUseUpdate carries status + content;
+                                // no synthetic ToolUseEnd follows (avoids double-emit).
                                 let _ = notif_tx
                                     .send(StreamEvent::ToolUseUpdate {
-                                        tool_use_id: tool_use_id.clone(),
-                                        tool_status: tool_status.clone(),
+                                        tool_use_id,
+                                        tool_status,
                                         tool_content,
                                         tool_locations,
                                     })
                                     .await;
-
-                                // Also send legacy ToolUseEnd if terminal status
-                                let is_terminal = tcu.fields.status.as_ref().map_or(false, |s| {
-                                    matches!(s, ToolCallStatus::Completed | ToolCallStatus::Failed)
-                                });
-                                if is_terminal {
-                                    let _ = notif_tx
-                                        .send(StreamEvent::ToolUseEnd { tool_use_id })
-                                        .await;
-                                }
                             }
                             AcpSessionUpdate::Plan(plan) => {
                                 if let Ok(json) = serde_json::to_string(&plan.entries) {
@@ -863,151 +860,6 @@ impl RustClient {
         })
     }
 
-    /// Send a prompt to the agent within the given (or default) session.
-    ///
-    /// Returns a list of [`Message`] objects. Streaming is handled at the
-    /// Python layer by wrapping this in an async iterator.
-    #[pyo3(signature = (text, session_id=None, content_json=None))]
-    fn prompt<'py>(
-        &self,
-        py: Python<'py>,
-        text: String,
-        session_id: Option<String>,
-        content_json: Option<String>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let inner = self.inner.clone();
-        let update_rx_slot = self.update_rx.clone();
-
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            // Snapshot cmd_tx and session_id without holding the lock across awaits.
-            let (cmd_tx, default_session_id) = {
-                let guard = inner.lock().await;
-                let client = guard
-                    .as_ref()
-                    .ok_or_else(|| ConduitError::Connection("client not connected".into()))?;
-                if !client.initialized {
-                    return Err(
-                        ConduitError::Connection("client not initialized".into()).into()
-                    );
-                }
-                (client.cmd_tx.clone(), client.session_id.clone())
-            };
-
-            // Use explicit session_id, or fall back to default, or auto-create.
-            let session_id = match session_id.or(default_session_id) {
-                Some(id) => id,
-                None => {
-                    let cwd = std::env::current_dir()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-                    let (reply_tx, reply_rx) = oneshot::channel();
-                    cmd_tx
-                        .send(AcpCommand::NewSession {
-                            cwd,
-                            meta_json: None,
-                            mcp_servers_json: None,
-                            reply: reply_tx,
-                        })
-                        .await
-                        .map_err(|_| {
-                            ConduitError::Connection("background task closed".into())
-                        })?;
-                    let id = reply_rx.await.map_err(|_| {
-                        ConduitError::Connection("session reply dropped".into())
-                    })??;
-
-                    // Persist session_id for subsequent prompts.
-                    {
-                        let mut guard = inner.lock().await;
-                        if let Some(client) = guard.as_mut() {
-                            client.session_id = Some(id.clone());
-                        }
-                    }
-                    id
-                }
-            };
-
-            // Send the prompt command to the background task.
-            let (reply_tx, reply_rx) = oneshot::channel();
-            cmd_tx
-                .send(AcpCommand::Prompt {
-                    session_id: session_id.clone(),
-                    text,
-                    content_json: content_json.clone(),
-                    reply: reply_tx,
-                })
-                .await
-                .map_err(|_| ConduitError::Connection("background task closed".into()))?;
-
-            // Collect streaming updates until the Done sentinel arrives.
-            let mut collected_text = String::new();
-            let mut got_message = false;
-            let mut stop_reason: Option<String> = None;
-            {
-                let mut rx_guard = update_rx_slot.lock().await;
-                let update_rx = rx_guard.as_mut().ok_or_else(|| {
-                    ConduitError::Connection("update channel not initialized".into())
-                })?;
-                loop {
-                    match update_rx.recv().await {
-                        Some(StreamEvent::TextDelta(t)) => {
-                            got_message = true;
-                            collected_text.push_str(&t);
-                        }
-                        Some(StreamEvent::ThoughtDelta(t)) => {
-                            if !got_message {
-                                collected_text.push_str(&t);
-                            }
-                        }
-                        Some(StreamEvent::ToolUseStart { .. })
-                        | Some(StreamEvent::ToolUseEnd { .. })
-                        | Some(StreamEvent::ToolUseUpdate { .. })
-                        | Some(StreamEvent::ModeChange { .. })
-                        | Some(StreamEvent::Plan { .. })
-                        | Some(StreamEvent::ConfigUpdate { .. })
-                        | Some(StreamEvent::CommandsUpdate { .. })
-                        | Some(StreamEvent::Usage { .. })
-                        | Some(StreamEvent::SessionInfo { .. })
-                        | Some(StreamEvent::RateLimit { .. }) => {
-                            // Non-text events consumed in batch mode.
-                        }
-                        Some(StreamEvent::Done { stop_reason: sr }) => {
-                            stop_reason = sr;
-                            break;
-                        }
-                        None => break,
-                    }
-                }
-            }
-
-            // Wait for the background task's confirmation that the prompt completed.
-            reply_rx
-                .await
-                .map_err(|_| ConduitError::Connection("prompt reply dropped".into()))??;
-
-            // Assemble a Message from the collected text.
-            let messages: Vec<Message> = if collected_text.is_empty() {
-                vec![]
-            } else {
-                vec![Message {
-                    role: MessageRole::Assistant,
-                    content: vec![ContentBlock {
-                        content_type: ContentType::Text,
-                        text: Some(collected_text),
-                        tool_name: None,
-                        tool_input: None,
-                        tool_use_id: None,
-                    }],
-                    session_id: Some(session_id),
-                    stop_reason,
-                }]
-            };
-
-            Ok(messages)
-        })
-    }
-
     /// Send a prompt without waiting for completion.
     ///
     /// Use with [`recv_update`] for real-time streaming. The prompt is sent
@@ -1163,11 +1015,6 @@ impl RustClient {
                     tool_locations,
                     ..su_defaults()
                 })),
-                Some(StreamEvent::ToolUseEnd { tool_use_id }) => Ok(Some(SessionUpdate {
-                    kind: UpdateKind::ToolUseEnd,
-                    tool_use_id: Some(tool_use_id),
-                    ..su_defaults()
-                })),
                 Some(StreamEvent::ModeChange { mode_id }) => Ok(Some(SessionUpdate {
                     kind: UpdateKind::ModeChange,
                     mode_id: Some(mode_id),
@@ -1205,16 +1052,13 @@ impl RustClient {
                             result?;
                         }
                     }
-                    // Return a Done update with stop_reason if caller wants it.
-                    if stop_reason.is_some() {
-                        Ok(Some(SessionUpdate {
-                            kind: UpdateKind::Done,
-                            stop_reason,
-                            ..su_defaults()
-                        }))
-                    } else {
-                        Ok(None)
-                    }
+                    // Always surface a terminal Done update so downstream
+                    // collectors and Stop hooks fire uniformly (D9).
+                    Ok(Some(SessionUpdate {
+                        kind: UpdateKind::Done,
+                        stop_reason,
+                        ..su_defaults()
+                    }))
                 }
                 Some(StreamEvent::RateLimit { method, params_json }) => Ok(Some(SessionUpdate {
                     kind: UpdateKind::RateLimit,
@@ -1581,7 +1425,7 @@ async fn acp_task(
 
                 // Extract stop_reason from the response.
                 let stop_reason = match &result {
-                    Ok(resp) => Some(format!("{:?}", resp.stop_reason)),
+                    Ok(resp) => Some(serde_wire_str(&resp.stop_reason)),
                     Err(_) => None,
                 };
 
