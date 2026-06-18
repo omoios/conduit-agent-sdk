@@ -256,9 +256,8 @@ def acp_adapter(client: Any) -> Adapter:
     from conduit_sdk.exceptions import ConduitError
 
     # Variants that carry no dedicated catalog event → ``agent.update``.
-    _GENERIC = (Plan, AvailableCommands, ModeChange, ConfigUpdate,
-                SessionInfo, RateLimit, Usage, Unknown)
-
+    _GENERIC = (AvailableCommands, ModeChange, ConfigUpdate,
+                SessionInfo, RateLimit, Unknown)
     class _AcpAdapter:
         name = "acp"
 
@@ -320,6 +319,17 @@ def acp_adapter(client: Any) -> Adapter:
                     elif isinstance(event, Done):
                         saw_terminal = True
                         yield _ev("run.completed")
+                    elif isinstance(event, Plan):
+                        yield _ev("agent.plan.created",
+                                  payload={"entries": event.entries})
+                    elif isinstance(event, Usage):
+                        yield _ev("budget.updated",
+                                  payload={
+                                      "used": event.used,
+                                      "size": event.size,
+                                      "cost_amount": event.cost_amount,
+                                      "cost_currency": event.cost_currency,
+                                  })
                     elif isinstance(event, _GENERIC):
                         yield _ev("agent.update", payload=to_record(event))
                     else:

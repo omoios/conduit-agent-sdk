@@ -32,7 +32,7 @@ The Python layer provides an async developer API that abstracts the complexity o
 
 **hooks.py** provides the `HookRunner` class. It supports decorator-based hook registration with priority ordering and a dispatch system for lifecycle events.
 
-**proxy.py** contains `ProxyChain`, the `Proxy` base class, `ContextInjector`, and `ResponseFilter`. These provide a proxy chain builder, though the `build()` method is still pending implementation.
+**proxy.py** contains `ProxyChain`, the `Proxy` base class, `ContextInjector`, and `ResponseFilter`. These provide a proxy chain builder — `async def build()` is implemented (see `ProxyChain.build()`).
 
 **tools.py** exports the `@tool` decorator, `McpSdkServerConfig`, and `create_sdk_mcp_server()`. Tools ARE callable by agents via the in-process MCP HTTP server — `Client._start_sdk_mcp_servers()` starts these during `connect()` and passes them as HTTP MCP servers to the agent at session creation.
 
@@ -41,6 +41,8 @@ The Python layer provides an async developer API that abstracts the complexity o
 **query.py** contains the `Query` class which manages the legacy control protocol alongside ACP.
 
 **types.py** defines all content block types, message types, and streaming event types used throughout the SDK.
+
+**events.py** is the canonical typed event surface. Re-exports the Rust `SessionEvent` variant structs + `normalize` via `from conduit_sdk._conduit_sdk import ...`; keeps `to_record`/`from_record` serialization and the wire-value enums (`ToolKind`, `ToolStatus`, `StopReason`).
 
 **exceptions.py** establishes the error hierarchy: `ConduitError` as the base, with subclasses like `ConnectionError`, `SessionError`, and `TransportError`.
 
@@ -54,13 +56,15 @@ The Rust layer handles all performance-critical ACP protocol operations and is e
 
 **types.rs** exports all PyO3 types including `Capabilities`, `Message`, `ContentBlock`, `SessionUpdate`, `UpdateKind`, `StreamEvent`, `ClientConfig`, `PermissionRequest`, `PermissionResponse`, and others.
 
+**events.rs** defines the 13 canonical `SessionEvent` variant structs + the total `normalize` decoder — all in Rust so the PyO3 boundary yields typed objects and the future napi-rs port reuses the same model.
+
 **control.rs** implements `RustControlProtocol`, a bidirectional JSON control protocol that runs alongside ACP for legacy permission, hook, and MCP callbacks.
 
 **hooks.rs** provides `RustHookDispatcher` for Rust-side hook dispatch. It includes the `HookType` enum and supports register, dispatch, and clear operations.
 
 **tools.rs** contains `RustToolRegistry` which registers Python callbacks as tool definitions and allows invocation by name with JSON input.
 
-**proxy.rs** has `RustProxyChain` which stores proxy configurations. The `build()` method is marked TODO pending sacp-conductor integration.
+**proxy.rs** has `RustProxyChain` which stores proxy configurations. The Rust `build()` method still defers to a future `agent-client-protocol-conductor` integration (TODO remains in `proxy.rs`).
 
 **error.rs** defines the `ConduitError` enum with variants mapped to corresponding Python exceptions.
 
@@ -106,8 +110,8 @@ Sending a prompt to an agent follows this path:
 
 1. `Client.prompt(text)` or `Client.prompt_stream(text)` normalizes the input through `_prepare_prompt()`, handling both text strings and content block lists.
 
-   - For `prompt()`: `RustClient.prompt()` sends the prompt, collects all response messages, and yields `Message` objects.
-   - For `prompt_stream()`: `RustClient.send_prompt()` initiates the prompt, then `recv_update()` polls for `SessionUpdate` objects.
+   - For both `prompt()` and `prompt_stream()`: `RustClient.send_prompt()` initiates the prompt, then `_stream_events` drains `SessionUpdate` objects, decoding each via the Rust-backed `normalize` into a typed `SessionEvent`. Redaction, persistence, and lifecycle hooks all fire within this shared core, so every prompt path is consistent.
+   - `prompt_stream()` yields the `SessionEvent` objects directly. `prompt()` folds them into `Message` objects (joining `TextDelta` text into one assistant message).
 
 2. In Rust, the prompt sends an `AcpCommand::Prompt` variant to the background task via the internal command channel.
 
@@ -144,12 +148,12 @@ Permission requests follow this path:
 
 ### PyO3 Boundary
 
-All complex data crosses the Python/Rust boundary as JSON strings. This design keeps PyO3 types simple while supporting the full ACP schema:
+The boundary uses two strategies:
 
-- Python serializes `AgentOptions` to a JSON string, and Rust deserializes it with `serde_json`.
-- Rust serializes streaming updates to Python `SessionUpdate` objects with typed fields.
+- **Streaming path** — Rust decodes each `SessionUpdate` into a typed `SessionEvent` via the `normalize` function in `src/events.rs`. PyO3 hands Python already-typed variant structs (`TextDelta`, `ToolCallStart`, `Done`, etc.) so no re-parsing is needed on the Python side.
+- **Configuration & control path** — complex data like `AgentOptions` still crosses as JSON strings: Python serializes to JSON, Rust deserializes with `serde_json`. The flat 18-field `SessionUpdate` wire struct is consumed internally by `normalize` and not exposed to user code.
 
-This approach avoids the complexity of mapping every ACP type directly through PyO3 while maintaining type safety on both sides.
+The Python `events.py` module re-exports all Rust variant classes and the `normalize` function, and keeps `to_record`/`from_record` helpers for session-store persistence. The wire-value enums (`ToolKind`, `ToolStatus`, `StopReason`) remain in Python as `str`-enums to preserve wire-string semantics.
 
 ## Current Status
 
@@ -174,7 +178,7 @@ The following features are complete and functional:
 
 The following features are planned but not yet implemented:
 
-- `ProxyChain.build()` is marked TODO and needs sacp-conductor integration.
+- `RustProxyChain.build()` is marked TODO and needs `agent-client-protocol-conductor` integration (the Python `ProxyChain.build()` is already implemented).
 - Client-side file system and terminal capabilities for agent-to-client requests.
 - MCP-over-ACP transport.
 - HTTP transport for remote agents.

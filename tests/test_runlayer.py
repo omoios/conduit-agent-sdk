@@ -452,22 +452,19 @@ class TestAcpNormalization:
         ]
         assert matches, "ConduitError → run.failed missing or wrong"
 
-    def test_usage_maps_to_agent_update(self) -> None:
-        # Per the catalog, Usage (like other non-delta updates) → agent.update.
+    def test_usage_maps_to_budget_updated(self) -> None:
+        # Per the catalog, Usage has a dedicated event now → budget.updated.
         events = self._collect([
             _StubUpdate(UpdateKind.Usage, usage_json='{"used": 42, "size": 100}'),
         ])
         matches = [
             e for e in events
-            if e.type == "agent.update"
+            if e.type == "budget.updated"
             and e.payload
-            and e.payload.get("event") == "usage"
             and e.payload.get("used") == 42
             and e.payload.get("size") == 100
         ]
-        assert matches, "Usage → agent.update missing or wrong"
-
-    # -- run.started is always emitted before any update events -------------
+        assert matches, "Usage → budget.updated missing or wrong"
 
     def test_run_started_is_emitted_first(self) -> None:
         events = self._collect([
