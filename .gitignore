@@ -34,3 +34,6 @@ Thumbs.db
 # Local agent/harness state
 .claude/settings.local.json
 .omp/runs/
+
+# Mnemopi local memory DBs (runtime state)
+banks/
