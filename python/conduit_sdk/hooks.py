@@ -69,6 +69,14 @@ class HookRunner:
     def __init__(self) -> None:
         self._hooks: list[RegisteredHook] = []
 
+    def has(self, hook_type: HookType) -> bool:
+        """Return True if any hook is registered for ``hook_type``.
+
+        Lets callers skip building a :class:`HookContext` when no hooks of a
+        given type are registered (the common case on the streaming hot path).
+        """
+        return any(h.hook_type == hook_type for h in self._hooks)
+
     def on(
         self,
         hook_type: HookType,

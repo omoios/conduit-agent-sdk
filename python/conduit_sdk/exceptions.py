@@ -35,6 +35,10 @@ class HookError(ConduitError):
     """Error in a lifecycle hook callback."""
 
 
+class HookBlockedError(HookError):
+    """A lifecycle hook blocked the operation (e.g. a PromptSubmit hook)."""
+
+
 class ProxyError(ConduitError):
     """Error building or running the proxy chain."""
 

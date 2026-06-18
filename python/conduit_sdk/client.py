@@ -31,13 +31,13 @@ from conduit_sdk._conduit_sdk import (
     SessionUpdate,
     UpdateKind,
 )
-from conduit_sdk.exceptions import ConnectionError
-from conduit_sdk.hooks import HookRunner
+from conduit_sdk.exceptions import ConnectionError, HookBlockedError
+from conduit_sdk.hooks import HookRunner, HookType
 from conduit_sdk.options import AgentOptions
 from conduit_sdk.query import Query
 from conduit_sdk.registry import Registry
 from conduit_sdk.session import Session
-from conduit_sdk.types import Capabilities, Message
+from conduit_sdk.types import Capabilities, HookContext, Message
 
 
 class Client:
@@ -173,6 +173,9 @@ class Client:
 
         # Start any in-process SDK MCP servers so the agent can reach them.
         await self._start_sdk_mcp_servers()
+        await self._dispatch_hook(
+            HookType.Connected, command=self._config.command
+        )
         return self._capabilities
 
     async def disconnect(self) -> None:
@@ -181,6 +184,7 @@ class Client:
             await self._query.close()
             self._query = None
         if self._connected:
+            await self._dispatch_hook(HookType.Disconnected)
             await self._rust_client.disconnect()
             self._connected = False
         await self._stop_sdk_mcp_servers()
@@ -200,6 +204,40 @@ class Client:
         for cfg in self._sdk_mcp_servers:
             await cfg.stop()
         self._sdk_mcp_servers.clear()
+
+    # -- Lifecycle hooks -----------------------------------------------------
+
+    async def _dispatch_hook(self, hook_type: HookType, **data: Any) -> HookContext | None:
+        """Fire registered hooks of ``hook_type`` (no-op when none registered).
+
+        Returns the resulting :class:`HookContext` (carrying any mutations a
+        hook applied), or ``None`` when no hook of that type is registered.
+        """
+        if not self._hooks.has(hook_type):
+            return None
+        ctx = HookContext(hook_type=hook_type, data=dict(data))
+        return await self._hooks.dispatch(hook_type, ctx)
+
+    async def _on_prompt_submit(self, text: str | list, session_id: str | None) -> str | list:
+        """Fire PromptSubmit hooks before a prompt is sent.
+
+        A hook may rewrite the prompt (set ``text`` on the context; str prompts
+        only) or block it (set ``blocked`` or return the ``"block"`` sentinel),
+        in which case :class:`HookBlockedError` is raised.
+        """
+        result = await self._dispatch_hook(
+            HookType.PromptSubmit,
+            text=text if isinstance(text, str) else None,
+            session_id=session_id,
+        )
+        if result is None:
+            return text
+        if result.get("blocked"):
+            raise HookBlockedError("prompt blocked by a PromptSubmit hook")
+        new_text = result.get("text")
+        if isinstance(text, str) and isinstance(new_text, str):
+            return new_text
+        return text
 
     @property
     def connected(self) -> bool:
@@ -262,6 +300,9 @@ class Client:
         self._default_session_id = await self._rust_client.new_session(
             cwd, meta_json, mcp_servers_json
         )
+        await self._dispatch_hook(
+            HookType.SessionCreated, session_id=self._default_session_id
+        )
         return self._default_session_id
 
     async def prompt(
@@ -285,6 +326,7 @@ class Client:
             raise ConnectionError("client is not connected \u2014 call connect() first")
         if session_id is None:
             session_id = await self._ensure_default_session()
+        text = await self._on_prompt_submit(text, session_id)
         text_str, content_json = self._prepare_prompt(text)
         messages = await self._rust_client.prompt(text_str, session_id, content_json)
         for msg in messages:
@@ -309,6 +351,7 @@ class Client:
             raise ConnectionError("client is not connected \u2014 call connect() first")
         if session_id is None:
             session_id = await self._ensure_default_session()
+        text = await self._on_prompt_submit(text, session_id)
         text_str, content_json = self._prepare_prompt(text)
         store = self._options.session_store if self._options else None
         await self._rust_client.send_prompt(text_str, session_id, content_json)
@@ -319,10 +362,23 @@ class Client:
             yield update
             if store is not None:
                 await store.append_update(session_id, self._record_update(update))
-            # A Done update is terminal — the agent's turn has ended. recv_update
-            # only returns None for a turn that reported no stop_reason, so we
-            # must also stop on an explicit Done or the next recv blocks forever.
-            if update.kind == UpdateKind.Done:
+            kind = update.kind
+            if kind == UpdateKind.ToolUseStart:
+                await self._dispatch_hook(
+                    HookType.PreToolUse,
+                    tool_name=update.tool_name,
+                    tool_input=update.tool_input,
+                    tool_use_id=update.tool_use_id,
+                )
+            elif kind == UpdateKind.ToolUseEnd:
+                await self._dispatch_hook(
+                    HookType.PostToolUse,
+                    tool_use_id=update.tool_use_id,
+                    tool_status=update.tool_status,
+                )
+            elif kind == UpdateKind.Done:
+                # A Done update is terminal — the agent's turn has ended.
+                await self._dispatch_hook(HookType.Stop, stop_reason=update.stop_reason)
                 break
 
     async def prompt_sync(
@@ -486,6 +542,7 @@ class Client:
         """
         import json
         result_json = await self._rust_client.delete_session(session_id)
+        await self._dispatch_hook(HookType.SessionDestroyed, session_id=session_id)
         return json.loads(result_json)
 
     async def set_config(self, session_id: str, config_id: str, value: str) -> dict:
@@ -544,6 +601,9 @@ class Client:
             mcp_servers_json = self._options.to_mcp_servers_json()
         session = Session(self)
         await session.create(cwd, meta_json=meta_json, mcp_servers_json=mcp_servers_json)
+        await self._dispatch_hook(
+            HookType.SessionCreated, session_id=session.session_id
+        )
         return session
 
     # -- Context manager -----------------------------------------------------
