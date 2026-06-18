@@ -7,6 +7,7 @@
 use crate::error::{ConduitError, Result};
 use std::collections::HashMap;
 use std::process::Stdio;
+use std::time::Duration;
 use tokio::process::{Child, Command};
 
 /// Handle to a running agent subprocess and its I/O streams.
@@ -44,6 +45,12 @@ impl AgentProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
 
+        // Put the agent in its own process group so that on teardown we can
+        // kill the whole group (agent + any tool-time descendants that
+        // inherited our pipes) instead of just the direct child.
+        #[cfg(unix)]
+        cmd.process_group(0);
+
         let child = cmd
             .spawn()
             .map_err(|e| ConduitError::Connection(format!("failed to spawn agent: {e}")))?;
@@ -67,11 +74,26 @@ impl AgentProcess {
             .ok_or_else(|| ConduitError::Transport("agent stdout already taken".into()))
     }
 
-    /// Terminate the agent subprocess.
+    /// Terminate the agent subprocess and any descendants it spawned.
+    ///
+    /// The agent runs in its own process group (see [`Self::spawn`]), so we
+    /// signal the *whole group* — this reaches tool-time children that
+    /// inherited our pipes and would otherwise keep the transport open (the
+    /// cause of teardown hangs on multi-step agent runs). The reap is bounded
+    /// so a wedged child can never block disconnect indefinitely.
     pub async fn kill(&mut self) -> Result<()> {
-        self.child
-            .kill()
-            .await
-            .map_err(|e| ConduitError::Transport(format!("failed to kill agent: {e}")))
+        #[cfg(unix)]
+        {
+            if let Some(pid) = self.child.id() {
+                // Negative pid => deliver the signal to the entire group.
+                let _ = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+            }
+            let _ = tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await;
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::time::timeout(Duration::from_secs(5), self.child.kill()).await;
+        }
+        Ok(())
     }
 }
