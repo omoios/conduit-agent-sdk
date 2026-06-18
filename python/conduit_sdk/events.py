@@ -1,21 +1,68 @@
 """Canonical typed event model for SessionUpdate normalization.
 
-Transforms the flat Rust-backed ``SessionUpdate`` object (``UpdateKind`` +
-JSON-string fields) into a typed frozen-dataclass union (``SessionEvent``),
-with pure ``normalize()``, ``to_record()``, and ``from_record()`` for
-serialization.
+The 13 variant structs and the total ``normalize`` decoder are implemented in
+Rust (``conduit_sdk._conduit_sdk``) and re-exported here — so the Python
+boundary receives already-typed objects and the future napi-rs port wraps the
+same definitions. This module keeps the wire-string enums, the JSON/enum
+helpers, and the ``to_record`` / ``from_record`` serialization (a per-language
+concern), plus the ``SessionEvent`` union alias.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, fields as _fields
 from enum import Enum
 from typing import Any, Union
+
+# Rust-backed variants + decoder.
+from conduit_sdk._conduit_sdk import (
+    AvailableCommands,
+    ConfigUpdate,
+    Done,
+    ModeChange,
+    Plan,
+    RateLimit,
+    SessionInfo,
+    TextDelta,
+    ThoughtDelta,
+    ToolCallStart,
+    ToolCallUpdate,
+    Unknown,
+    Usage,
+    normalize,
+)
+
+__all__ = [
+    "ToolKind",
+    "ToolStatus",
+    "StopReason",
+    "TextDelta",
+    "ThoughtDelta",
+    "ToolCallStart",
+    "ToolCallUpdate",
+    "Plan",
+    "AvailableCommands",
+    "ModeChange",
+    "ConfigUpdate",
+    "Usage",
+    "SessionInfo",
+    "RateLimit",
+    "Done",
+    "Unknown",
+    "SessionEvent",
+    "normalize",
+    "to_record",
+    "from_record",
+]
 
 
 # ---------------------------------------------------------------------------
 # Wire-value string Enums
+#
+# Kept in Python (not Rust) because PyO3 `eq_int` enums are integer-valued,
+# which would break the wire-string semantics. Variant struct fields that hold
+# a wire-enum value store the wire *string*; these str-enums compare equal to
+# their own value, so `event.kind == ToolKind.READ` holds.
 # ---------------------------------------------------------------------------
 
 
@@ -48,7 +95,7 @@ class StopReason(str, Enum):
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers (pure Python utilities; also exercised directly by the test suite)
 # ---------------------------------------------------------------------------
 
 
@@ -58,23 +105,24 @@ def _to_enum(cls: type[Enum], value: str | None, default: Any = None) -> Any:
         return default
     try:
         return cls(value)
-    except (ValueError, TypeError):
+    except (ValueError, KeyError):
         return default
 
 
 def _safe_json(s: str | None) -> Any:
     """Parse *s* as JSON, returning the raw string on parse failure, or ``None``
-    when *s* is ``None`` or empty."""
-    if not s:
+    for ``None``/empty input. Never raises.
+    """
+    if s is None or s == "":
         return None
     try:
         return json.loads(s)
-    except (json.JSONDecodeError, TypeError, ValueError):
+    except (ValueError, TypeError):
         return s
 
 
 # ---------------------------------------------------------------------------
-# Content-block text extraction (ported from toolview._extract_text)
+# Content-block text extraction (used by the public _decode_tool_output helper)
 # ---------------------------------------------------------------------------
 
 
@@ -112,95 +160,7 @@ def _decode_tool_output(content_json: str | None) -> tuple[str | None, Any | Non
 
 
 # ---------------------------------------------------------------------------
-# SessionEvent variants
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class TextDelta:
-    text: str
-
-
-@dataclass(frozen=True)
-class ThoughtDelta:
-    text: str
-
-
-@dataclass(frozen=True)
-class ToolCallStart:
-    tool_use_id: str
-    title: str
-    kind: ToolKind | None
-    input: Any
-    status: ToolStatus | None
-
-
-@dataclass(frozen=True)
-class ToolCallUpdate:
-    tool_use_id: str
-    status: ToolStatus | None
-    output: str | None
-    raw_content: Any | None
-    locations: list | None
-
-
-@dataclass(frozen=True)
-class Plan:
-    entries: list
-
-
-@dataclass(frozen=True)
-class AvailableCommands:
-    commands: list
-
-
-@dataclass(frozen=True)
-class ModeChange:
-    mode_id: str
-
-
-@dataclass(frozen=True)
-class ConfigUpdate:
-    config: Any
-
-
-@dataclass(frozen=True)
-class Usage:
-    used: int | None
-    size: int | None
-    cost_amount: float | None
-    cost_currency: str | None
-
-
-@dataclass(frozen=True)
-class SessionInfo:
-    title: str | None
-    updated_at: str | None
-
-
-@dataclass(frozen=True)
-class RateLimit:
-    status: str
-    resets_at: int
-    rate_limit_type: str
-    utilization: float
-    is_using_overage: bool
-    surpassed_threshold: float
-
-
-@dataclass(frozen=True)
-class Done:
-    stop_reason: StopReason | None
-
-
-@dataclass(frozen=True)
-class Unknown:
-    kind: str
-    raw: dict
-
-
-# ---------------------------------------------------------------------------
-# Union type
+# SessionEvent union
 # ---------------------------------------------------------------------------
 
 SessionEvent = Union[
@@ -237,107 +197,11 @@ _ALL_VARIANTS: list[type] = [
 
 
 # ---------------------------------------------------------------------------
-# normalize  (total, pure)
-# ---------------------------------------------------------------------------
-
-
-def normalize(update: Any) -> SessionEvent:
-    """Map a ``SessionUpdate`` (Rust PyO3 duck-typed object) to a typed
-    :class:`SessionEvent` union member.
-
-    TOTAL — never raises.  On any unexpected error the result is an
-    ``Unknown`` variant with ``kind="normalize_error"``.
-    """
-    from conduit_sdk._conduit_sdk import UpdateKind
-
-    try:
-        kind = update.kind
-    except Exception:
-        return Unknown(kind="normalize_error", raw={})
-
-    try:
-        if kind == UpdateKind.TextDelta:
-            _text = getattr(update, 'text', None)
-            return TextDelta(text=_text or "")
-        elif kind == UpdateKind.ThoughtDelta:
-            _text = getattr(update, 'text', None)
-            return ThoughtDelta(text=_text or "")
-        elif kind == UpdateKind.ToolUseStart:
-            return ToolCallStart(
-                tool_use_id=getattr(update, 'tool_use_id', None) or "",
-                title=getattr(update, 'tool_name', None) or "",
-                kind=_to_enum(ToolKind, getattr(update, 'tool_kind', None), None),
-                input=_safe_json(getattr(update, 'tool_input', None)),
-                status=_to_enum(ToolStatus, getattr(update, 'tool_status', None), None),
-            )
-        elif kind == UpdateKind.ToolUseUpdate:
-            output, raw_content = _decode_tool_output(getattr(update, 'tool_content', None))
-            raw_locs = _safe_json(getattr(update, 'tool_locations', None))
-            locations = raw_locs if isinstance(raw_locs, list) else None
-            return ToolCallUpdate(
-                tool_use_id=getattr(update, 'tool_use_id', None) or "",
-                status=_to_enum(ToolStatus, getattr(update, 'tool_status', None), None),
-                output=output,
-                raw_content=raw_content,
-                locations=locations,
-            )
-        elif kind == UpdateKind.ToolUseEnd:
-            return ToolCallUpdate(
-                tool_use_id=getattr(update, 'tool_use_id', None) or "",
-                status=None,
-                output=None,
-                raw_content=None,
-                locations=None,
-            )
-        elif kind == UpdateKind.Plan:
-            entries = _safe_json(getattr(update, 'plan_json', None))
-            return Plan(entries=entries if isinstance(entries, list) else [])
-        elif kind == UpdateKind.CommandsUpdate:
-            cmds = _safe_json(getattr(update, 'commands_json', None))
-            return AvailableCommands(commands=cmds if isinstance(cmds, list) else [])
-        elif kind == UpdateKind.ModeChange:
-            return ModeChange(mode_id=getattr(update, 'mode_id', None) or "")
-        elif kind == UpdateKind.ConfigUpdate:
-            return ConfigUpdate(config=_safe_json(getattr(update, 'config_json', None)))
-        elif kind == UpdateKind.Usage:
-            raw = _safe_json(getattr(update, 'usage_json', None))
-            u = raw if isinstance(raw, dict) else {}
-            cost = u.get("cost") or {}
-            return Usage(
-                used=u.get("used"),
-                size=u.get("size"),
-                cost_amount=cost.get("amount"),
-                cost_currency=cost.get("currency"),
-            )
-        elif kind == UpdateKind.SessionInfo:
-            raw = _safe_json(getattr(update, 'session_info_json', None))
-            i = raw if isinstance(raw, dict) else {}
-            return SessionInfo(title=i.get("title"), updated_at=i.get("updated_at"))
-        elif kind == UpdateKind.RateLimit:
-            raw = _safe_json(getattr(update, 'rate_limit_json', None))
-            data = raw if isinstance(raw, dict) else {}
-            params = data.get("params") or {}
-            info = params.get("rate_limit_info", params)
-            return RateLimit(
-                status=info.get("status", ""),
-                resets_at=info.get("resetsAt", 0),
-                rate_limit_type=info.get("rateLimitType", ""),
-                utilization=info.get("utilization", 0.0),
-                is_using_overage=info.get("isUsingOverage", False),
-                surpassed_threshold=info.get("surpassedThreshold", 0.0),
-            )
-        elif kind == UpdateKind.Done:
-            return Done(stop_reason=_to_enum(StopReason, getattr(update, 'stop_reason', None), None))
-        elif kind == UpdateKind.Error:
-            return Unknown(kind="error", raw={"message": getattr(update, 'error', None) or ""})
-        else:
-            return Unknown(kind=str(kind), raw={})
-    except Exception:
-        return Unknown(kind="normalize_error", raw={"kind": str(getattr(update, 'kind', None))})
-
-
-# ---------------------------------------------------------------------------
-# Serialization
+# Serialization (to_record / from_record) — a per-language concern.
+#
+# Note: `normalize` is Rust; these helpers operate on the Rust-backed variant
+# structs via their getters / constructors. The round-trip invariant
+# ``from_record(to_record(e)) == e`` is guaranteed by each variant's `__eq__`.
 # ---------------------------------------------------------------------------
 
 _VARIANT_TO_DISCRIMINATOR: dict[type, str] = {
@@ -356,16 +220,40 @@ _VARIANT_TO_DISCRIMINATOR: dict[type, str] = {
     Unknown: "unknown",
 }
 
+_VARIANT_FIELDS: dict[type, tuple[str, ...]] = {
+    TextDelta: ("text",),
+    ThoughtDelta: ("text",),
+    ToolCallStart: ("tool_use_id", "title", "kind", "input", "status"),
+    ToolCallUpdate: ("tool_use_id", "status", "output", "raw_content", "locations"),
+    Plan: ("entries",),
+    AvailableCommands: ("commands",),
+    ModeChange: ("mode_id",),
+    ConfigUpdate: ("config",),
+    Usage: ("used", "size", "cost_amount", "cost_currency"),
+    SessionInfo: ("title", "updated_at"),
+    RateLimit: (
+        "status",
+        "resets_at",
+        "rate_limit_type",
+        "utilization",
+        "is_using_overage",
+        "surpassed_threshold",
+    ),
+    Done: ("stop_reason",),
+    Unknown: ("kind", "raw"),
+}
+
 
 def to_record(event: SessionEvent) -> dict:
     """Serialize *event* to a JSON-safe dict with discriminator key ``event``."""
-    name = _VARIANT_TO_DISCRIMINATOR.get(type(event), "unknown")
+    cls = type(event)
+    name = _VARIANT_TO_DISCRIMINATOR.get(cls, "unknown")
     d: dict[str, Any] = {"event": name}
-    for f in _fields(event):
-        val = getattr(event, f.name)
+    for f in _VARIANT_FIELDS.get(cls, ()):
+        val = getattr(event, f)
         if isinstance(val, Enum):
             val = val.value
-        d[f.name] = val
+        d[f] = val
     return d
 
 
@@ -431,27 +319,3 @@ def from_record(record: dict) -> SessionEvent:
         return Unknown(kind=record.get("kind", "unknown"), raw=record.get("raw", {}))
     else:
         return Unknown(kind=event_type, raw=record)
-
-
-__all__ = [
-    "ToolKind",
-    "ToolStatus",
-    "StopReason",
-    "TextDelta",
-    "ThoughtDelta",
-    "ToolCallStart",
-    "ToolCallUpdate",
-    "Plan",
-    "AvailableCommands",
-    "ModeChange",
-    "ConfigUpdate",
-    "Usage",
-    "SessionInfo",
-    "RateLimit",
-    "Done",
-    "Unknown",
-    "SessionEvent",
-    "normalize",
-    "to_record",
-    "from_record",
-]

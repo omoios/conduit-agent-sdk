@@ -8,6 +8,7 @@
 mod client;
 mod control;
 mod error;
+mod events;
 mod hooks;
 mod proxy;
 mod session;
@@ -24,6 +25,7 @@ fn _conduit_sdk(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Register all submodule types on the flat module.
     types::register(m)?;
+    events::register(m)?;
     control::register(m)?;
     client::register(m)?;
     session::register(m)?;

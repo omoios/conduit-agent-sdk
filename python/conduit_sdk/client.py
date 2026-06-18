@@ -399,15 +399,13 @@ class Client:
                 await self._dispatch_hook(
                     HookType.PostToolUse,
                     tool_use_id=event.tool_use_id,
-                    tool_status=event.status.value,
+                    tool_status=event.status,
                     tool_output=event.output,
                 )
             elif isinstance(event, Done):
                 await self._dispatch_hook(
                     HookType.Stop,
-                    stop_reason=(
-                        event.stop_reason.value if event.stop_reason else None
-                    ),
+                    stop_reason=event.stop_reason,
                 )
                 break
 
@@ -444,9 +442,7 @@ class Client:
             if isinstance(event, TextDelta):
                 parts.append(event.text)
             elif isinstance(event, Done):
-                stop_reason = (
-                    event.stop_reason.value if event.stop_reason else None
-                )
+                stop_reason = event.stop_reason
         body = "".join(parts)
         if body:
             yield Message(
