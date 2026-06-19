@@ -18,7 +18,7 @@ cp "$REPO/Cargo.toml" "$REPO/Cargo.lock" "$REPO/pyproject.toml" "$REPO/README.md
 cp -R "$REPO/src" "$CTX/src"
 cp -R "$REPO/python" "$CTX/python"
 rm -f "$CTX"/python/conduit_sdk/*.so   # drop host (macOS) ext; Linux wheel is built fresh
-cp "$REPO/infra/sandbox/Dockerfile" "$REPO/infra/sandbox/echo_agent.py" "$CTX/"
+cp "$REPO/infra/sandbox/Dockerfile" "$REPO/infra/sandbox/echo_agent.py" "$REPO/infra/sandbox/snoop_agent.py" "$CTX/"
 
 echo "building $TAG from clean context $CTX ..."
 docker build "$CTX" -t "$TAG"
