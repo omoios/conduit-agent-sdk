@@ -14,7 +14,8 @@ guarantees from the seed:
 Because the normalized event stream is identical to an in-process run of the same
 agent, ``Run`` / ``Runner`` / ``Result`` are unchanged whether the agent runs
 locally or in a container (the seed's with/without-sandbox event-stability
-invariant).
+invariant). :func:`hardening_args` returns the ``docker run`` flags that lock the
+sandbox down (no network, read-only root, resource caps, dropped capabilities).
 """
 
 from __future__ import annotations
@@ -23,7 +24,51 @@ from collections.abc import Sequence
 
 from conduit_sdk.runlayer import Adapter, process_adapter
 
-__all__ = ["docker_adapter"]
+__all__ = ["docker_adapter", "hardening_args"]
+
+
+def hardening_args(
+    *,
+    network: bool = False,
+    read_only_root: bool = True,
+    tmpfs: Sequence[str] = ("/tmp",),
+    memory: str | None = "512m",
+    cpus: str | None = "1.0",
+    pids_limit: int | None = 256,
+    drop_all_caps: bool = True,
+    no_new_privileges: bool = True,
+    user: str | None = None,
+) -> list[str]:
+    """Return ``docker run`` flags that harden the sandbox.
+
+    Safe defaults for an agent that only touches its mounted workspace: no
+    network egress, a read-only root filesystem (the ``-v`` workspace mount stays
+    writable), a ``tmpfs`` ``/tmp``, memory/CPU/PID caps, all Linux capabilities
+    dropped, and ``no-new-privileges``. ``user`` (e.g. ``"1000:1000"``) is opt-in
+    because non-root writes to a bind mount are environment-specific.
+
+    Pass the result as ``docker_adapter(..., extra_run_args=hardening_args())``.
+    """
+    args: list[str] = []
+    if not network:
+        args += ["--network", "none"]
+    if read_only_root:
+        args.append("--read-only")
+    for mount in tmpfs:
+        args += ["--tmpfs", mount]
+    if memory:
+        args += ["--memory", memory]
+    if cpus:
+        args += ["--cpus", cpus]
+    if pids_limit is not None:
+        args += ["--pids-limit", str(pids_limit)]
+    if drop_all_caps:
+        args += ["--cap-drop", "ALL"]
+    if no_new_privileges:
+        args += ["--security-opt", "no-new-privileges"]
+    if user:
+        args += ["--user", user]
+    return args
 
 
 def docker_adapter(
@@ -54,8 +99,8 @@ def docker_adapter(
     platform:
         Optional ``--platform`` value (e.g. ``"linux/amd64"``).
     extra_run_args:
-        Extra args inserted right after ``docker run --rm`` (e.g.
-        ``["--network", "none"]`` to deny network egress).
+        Extra args inserted right after ``docker run --rm`` (e.g. the output of
+        :func:`hardening_args`, or ``["--network", "none"]``).
     source:
         ``AgentEvent.source`` stamped on synthesized lifecycle events.
     """
