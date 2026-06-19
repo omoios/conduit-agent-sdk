@@ -121,7 +121,7 @@ Command { type: "prompt" | "stop" | "cancel", runId, task?, agent?, model? }
 
 ## 8. Error handling & reliability
 
-- **Worker crash mid-run** — the PEL redelivers the command. **Stage C policy: fail-fast** (emit `run.failed`; the agent process died with the worker). **Stage A: configurable retry policy.**
+- **Worker crash mid-run** — the PEL redelivers the command. **Stage C policy: fail-fast** (emit `run.failed`; the agent process died with the worker). **Stage A policy: restart the run (idempotent on `runId`) up to a max-retry count, then emit `run.failed`.**
 - **At-least-once** — consumers dedupe on `sequence`.
 - **Poison command** — max-deliveries → a `commands:dead` dead-letter stream.
 - **Secrets** — reuse the SDK `redaction` stage on every event *before* publish; nothing secret reaches the queue; BYOK keys are never published.
@@ -159,8 +159,10 @@ flowchart TD
 - **Stage C is one tight track** — it builds the shared foundation everyone reuses; do not parallelize it.
 - **Stage A fans out** — each port adapter is an independent goal, collision-free because adapters are disjoint and integrate only through the frozen queue contract. The `SessionDO` swap is the one integration goal; sequence it last.
 
-## 11. Open questions / deferred decisions
+## 11. Decisions (locked)
 
-- **Worker-resume vs fail-on-crash for Stage A** — Stage C fails fast. Stage A needs a policy: restart the run (idempotent task) vs mark failed vs resume-from-snapshot. Recommended default: restart with a max-retry, escalate to failed.
-- **Queue migration target** — Redis Streams for the prototype; confirm the larger thing targets NATS JetStream vs Kafka/Redpanda before the contract calcifies (kept transport-agnostic to defer this).
-- **Where the prototype code lives** — Stage C is net-new SDK-adjacent code; confirm whether it lands in `conduit-agent-sdk` (a `queue/` module + a worker entry) or a new package.
+These were the spec's open questions; all resolved to the recommended defaults (2026-06-19, user sign-off):
+
+- **Stage A crash policy** — restart the run (idempotent on `runId`) up to a max-retry count, then emit `run.failed`. Stage C remains fail-fast.
+- **Queue migration target** — Redis Streams for the prototype; the larger-target choice (NATS JetStream vs Kafka/Redpanda) is deliberately deferred. The `AgentEvent` + `Command` contract and the queue `Protocol` stay transport-agnostic, so migration is a transport swap, not a contract rewrite.
+- **Where Stage C code lives** — in `conduit-agent-sdk` as a new `queue/` module plus a worker entry point (not a separate package). Stage A's TypeScript adapters live in `agent-coordinator` behind its existing ports.
