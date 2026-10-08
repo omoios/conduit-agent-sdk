@@ -1,0 +1,138 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://conduit-agent-sdk/schema/result.schema.json",
+  "title": "RunResult",
+  "description": "Canonical wire shape for the final result of a Background Agent SDK run (per docs/seed/.../SOURCE.md §10). The Python field `error` carries the seed `failure` object and is emitted under the wire key `failure`. eventCount/startedAt/endedAt are SDK extras beyond the seed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["runId", "status", "changedFiles", "tests", "approvals", "artifacts"],
+  "properties": {
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["completed", "failed", "cancelled", "timed_out"]
+    },
+    "finalOutput": {
+      "description": "Final agent message text (nullable)."
+    },
+    "summary": {
+      "description": "Human-readable terminal summary (nullable)."
+    },
+    "changedFiles": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Deduplicated list of files changed during the run."
+    },
+    "diff": {
+      "description": "Unified diff of all changes (nullable)."
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "exitCode"],
+        "properties": {
+          "name": {},
+          "command": {"type": "string"},
+          "exitCode": {"type": "integer"},
+          "durationMs": {"type": "integer", "minimum": 0},
+          "passed": {"type": "boolean"},
+          "output": {}
+        }
+      }
+    },
+    "approvals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "decision"],
+        "properties": {
+          "id": {"type": "string"},
+          "decision": {"type": "string", "enum": ["approved", "rejected", "expired"]},
+          "reason": {},
+          "by": {}
+        }
+      }
+    },
+    "pr": {
+      "description": "Opened pull request (nullable).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "url", "number", "draft"],
+      "properties": {
+        "provider": {"type": "string", "enum": ["github"]},
+        "url": {"type": "string"},
+        "number": {"type": "integer"},
+        "draft": {"type": "boolean"}
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind"],
+        "properties": {
+          "id": {"type": "string"},
+          "kind": {"type": "string", "enum": ["log", "diff", "report", "trace", "test-output", "profile"]},
+          "url": {},
+          "path": {}
+        }
+      }
+    },
+    "usage": {
+      "description": "Cumulative usage/cost (nullable).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "inputTokens": {"type": "integer", "minimum": 0},
+        "outputTokens": {"type": "integer", "minimum": 0},
+        "costUsd": {"type": "number", "minimum": 0},
+        "durationMs": {"type": "integer", "minimum": 0}
+      }
+    },
+    "failure": {
+      "description": "Failure diagnosis (nullable). Mirrors seed `failure`; Python Result.error.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string"},
+        "message": {"type": "string"},
+        "diagnosis": {},
+        "retryable": {"type": "boolean"}
+      }
+    },
+    "questions": {
+      "type": "array",
+      "description": "Elicitation resolutions: agent-asked questions and their answers.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": {"type": "string", "enum": ["responded", "cancelled", "expired", "accept", "decline", "cancel"]},
+          "content": {},
+          "message": {}
+        }
+      }
+    },
+    "eventCount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "SDK extra: total events emitted during the run."
+    },
+    "startedAt": {
+      "type": "string",
+      "description": "SDK extra: ISO-8601 start timestamp."
+    },
+    "endedAt": {
+      "type": "string",
+      "description": "SDK extra: ISO-8601 end timestamp."
+    }
+  }
+}

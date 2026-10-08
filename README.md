@@ -437,6 +437,58 @@ Known limitations:
 
 See docs/phase2-plan.md and docs/phase3-plan.md for the roadmap.
 
+
+## Background Agent SDK (local)
+
+The SDK includes a local run layer (`conduit_sdk.runlayer`) that wraps ACP agents
+with a normalized event stream and structured result. No network, no registry.
+
+### Mock quick-start
+
+```python
+from conduit_sdk.runlayer import Runner, Agent, mock_adapter
+
+async def main():
+    script = [
+        {"type": "agent.message.delta", "payload": {"text": "Hi!", "channel": "final"}},
+    ]
+    result = await Runner.run(
+        Agent(name="mock"),
+        task="say hi",
+        adapter=mock_adapter(script),
+    )
+    print(result.final_output)  # "Hi!"
+```
+
+### Local ACP quick-start
+
+```python
+from conduit_sdk.runlayer import acp_agent, Runner, Agent
+from conduit_sdk import Client
+
+async def main():
+    # From a command list (e.g. OpenCode in ACP mode):
+    adapter = acp_agent(["opencode", "acp"])
+
+    # Or from the registry:
+    # adapter = acp_agent("opencode", registry=my_registry)
+
+    result = await Runner.run(Agent(name="local"), task="list files", adapter=adapter)
+    print(result.status, result.changed_files)
+```
+
+The `acp_agent` adapter accepts either a command list (like `["opencode", "acp"]`)
+or a registry id string (`Client.from_registry`). It installs a `can_use_tool`
+permission bridge that routes through the Run's Policy, enabling gate-by-approval
+workflows for local agents.
+
+### Examples
+
+| # | File | What it demonstrates |
+|---|---|---|
+| 32 | `examples/32_buggy_calculator.py` | Mock run with evidence: file edits, test results, approval gate |
+| 33 | `examples/33_acp_local_run.py` | Full local ACP run with adapter and structured Result |
+
 ## License
 
 MIT

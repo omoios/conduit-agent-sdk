@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://conduit-agent-sdk/schema/agent_event.schema.json",
+  "title": "AgentEvent",
+  "description": "Canonical wire envelope for a Background Agent SDK run event. CamelCase form (per docs/seed/.../EVENTS.md §envelope + A3). Python fields are snake_case, bridged by runcore.to_record/from_record.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "type", "runId", "sequence", "timestamp", "source", "redactionStatus"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Short unique event identifier."
+    },
+    "type": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9_]+)+$",
+      "description": "Dotted catalog event name (e.g. run.started, agent.message.delta) or an x.* experimental name. See schema/event_catalog.json for the authoritative list."
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Strictly increasing per run, starting at 1."
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 1,
+      "description": "ISO-8601 date-time string."
+    },
+    "source": {
+      "type": "string",
+      "enum": ["sdk", "adapter", "proxy", "agent", "sandbox", "controller", "server"]
+    },
+    "redactionStatus": {
+      "type": "string",
+      "enum": ["none", "redacted", "blocked", "unknown"]
+    },
+    "summary": {
+      "description": "Optional human-readable summary. Nullable; string when present."
+    },
+    "payload": {
+      "description": "Optional typed payload (shape depends on `type`). Nullable; object when present."
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Envelope schema version (A3). Defaults to 1."
+    },
+    "traceId": {
+      "description": "Reserved (A3): distributed-tracing id. Nullable; emitted only with the deferred tracing work."
+    },
+    "spanId": {
+      "description": "Reserved (A3): tracing span id. Nullable."
+    },
+    "workspaceId": {
+      "description": "Reserved (A3): workspace id. Nullable."
+    },
+    "tenantId": {
+      "description": "Reserved (A3): tenant id. Nullable."
+    }
+  }
+}

@@ -912,3 +912,170 @@ except AgentNotFoundError:
 except ConduitError as e:
     print(f"SDK error: {e}")
 ```
+
+## Run Layer + ACP Integration
+
+The run layer provides a normalized event abstraction over ACP agent execution,
+collecting evidence (file edits, test results, approvals) into a structured
+`Result`. All types are importable from `conduit_sdk.runlayer`.
+
+### Runner
+
+```python
+from conduit_sdk.runlayer import Runner, Agent
+
+run = await Runner.start(
+    Agent(name="my-agent"),
+    task="fix the bug in calc.py",
+    adapter=acp_adapter(client),
+    policy=read_only(),
+    on_approval=my_handler,
+    redaction=my_filter,
+    approval_timeout_s=300,
+    timeout=600,
+)
+```
+
+**Parameters:**
+- `agent` (Agent): Configuration (name, instructions, policy fallback).
+- `task` (str): The prompt text sent to the agent.
+- `adapter` (Adapter): Execution backend (mock, acp, acp_agent, process, conductor).
+- `policy` (Policy | None): Optional gate policy (read_only, deny, require_approval_for, compose, etc.).
+- `on_approval` (callable | None): Callback for approval requests; sync or async.
+- `redaction` (callable | None): Secret-scrubbing filter for event payloads.
+- `approval_timeout_s` (float): Seconds before a pending approval expires (default 300).
+- `timeout` (float | None): Total run deadline in seconds (default None = no limit).
+
+**Runner.run(agent, \*, task, adapter, \*\*kw) -> Result** — one-shot convenience;
+drains the run and returns the final `Result` directly.
+
+### Run
+
+```python
+run = await Runner.start(...)
+
+# Iterate events as they arrive
+async for ev in run.events():
+    print(ev.type, ev.payload)
+
+# Collect the final result
+result = await run.result()
+print(result.status, result.final_output, result.changed_files)
+
+# Check status without consuming
+status = run.status()  # "running" | "completed" | ...
+
+# Cancel mid-run (idempotent)
+await run.cancel(reason="user requested stop")
+
+# Approve or reject a pending approval (external mode)
+await run.approve("approval_id_123", approved_by="admin")
+await run.reject("approval_id_456", reason="not needed")
+```
+
+**Methods:**
+- `events()` — async iterator yielding every `AgentEvent`.
+- `result()` — consume remaining events, return `Result` (cached).
+- `status()` — current run status string.
+- `cancel(reason=None)` — enqueue cancelling + cancelled events.
+- `approve(approval_id, \*, reason=None, approved_by=None)` — resolve approval.
+- `reject(approval_id, \*, reason=None, rejected_by=None)` — reject approval.
+
+### Adapter Types
+
+```python
+from conduit_sdk.runlayer import (
+    mock_adapter,
+    acp_adapter,
+    acp_agent,
+    conductor_adapter,
+    process_adapter,
+    query,
+)
+```
+
+**`mock_adapter(script, \*, source="adapter") -> Adapter`**
+
+Yields raw events from a declarative script (list of dicts or AgentEvents).
+Missing lifecycle events are auto-injected. Used in tests and conformance vectors.
+
+**`acp_adapter(client) -> Adapter`**
+
+Wraps a `conduit_sdk.Client` instance as an Adapter. Consumes the canonical
+`SessionEvent` stream from `client.prompt_stream(task)` and maps each event to
+the run catalog (`run.started`, `agent.message.delta`, `tool.started`,
+`tool.completed`, `run.completed`, `run.failed`, …).
+
+**`acp_agent(spec, \*, options=None, registry=None, timeout=60) -> Adapter`**
+
+Creates an ACP adapter from an agent specification:
+- **Command list** — e.g. `acp_agent(["opencode", "acp"])` spawns the agent
+  process directly.
+- **Registry id** — e.g. `acp_agent("claude-acp", registry=reg)` uses
+  `Client.from_registry` to resolve the command.
+
+Installs a `can_use_tool` permission bridge routed through the Run's Policy
+(deadlock-free by design — evaluates on the consumer task, not the I/O loop).
+
+**`conductor_adapter(command, chain, \*, timeout=60) -> Adapter`**
+
+Builds a conductor chain — spawns an agent through a proxy chain using the
+`agent-client-protocol-conductor` binary. The binary must be on PATH.
+
+**`process_adapter(command, \*, cwd=None, env=None) -> Adapter`**
+
+Spawns a subprocess emitting newline-delimited JSON events. Each non-empty
+stdout line is parsed as `{type, summary?, payload?}`. Missing terminal events
+are synthesized from exit code.
+
+**`query(prompt) -> AsyncIterator[Message]`**
+
+One-shot convenience: resolves `"claude-acp"` from the registry, spawns,
+prompts, yields messages, and cleans up. Equivalent to a full
+`Client.from_registry("claude-acp")` → `prompt_stream` → disconnect flow.
+
+### Policy Factories
+
+Policies gate agent actions (commands, file writes, tool calls) before they
+reach the reducer. Import from `conduit_sdk.policy`:
+
+```python
+from conduit_sdk.policy import (
+    read_only,              # Deny mutation commands; allow reads/tools
+    deny,                   # Deny everything
+    require_approval_for,   # Require approval for matching commands/files
+    safe_local,             # Sensible local defaults
+    compose,                # Combine policies (deny > require > allow)
+    max_runtime_minutes,    # Runtime budget
+    max_cost_usd,           # Cost budget
+    Action, ApprovalRequest, ApprovalDecision, PolicyDecision,
+)
+```
+
+### Result
+
+```python
+@dataclass
+class Result:
+    run_id: str
+    status: str          # completed | failed | cancelled | timed_out
+    event_count: int
+    summary: str | None
+    error: dict | None   # wire key "failure"; present when status=="failed"
+    started_at: str
+    ended_at: str
+    final_output: str | None
+    changed_files: list[str]
+    diff: str | None
+    tests: list[dict]    # {command, exitCode, passed, durationMs, output}
+    approvals: list[dict] # {id, decision, reason?, by?}
+    pr: dict | None
+    artifacts: list[dict]
+    usage: dict | None
+```
+
+The `error` field is the Python name for the seed `failure` object
+(`{"code", "message", "retryable?", "diagnosis?"}`). On the wire it appears as
+`"failure"` for seed compatibility. The `step` / `finalize` pipeline ensures
+all fields are populated deterministically with a seeded `new_id` and fixed
+clock, enabling reproducible conformance testing.

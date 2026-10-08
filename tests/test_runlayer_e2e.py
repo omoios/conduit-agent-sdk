@@ -45,9 +45,10 @@ async def test_acp_adapter_full_turn() -> None:
         assert events[0].source == "sdk"
 
         # --- Tool events ---
-        tool_started = [e for e in events if e.type == "tool.started"]
+        # --- Tool events (read-kind tool surfaces as file.read, not tool.started) ---
+        file_reads = [e for e in events if e.type == "file.read"]
         tool_completed = [e for e in events if e.type == "tool.completed"]
-        assert len(tool_started) == 1
+        assert len(file_reads) == 1
         # tool.completed is derived from the terminal ToolCallUpdate: it carries
         # the title (remembered from ToolCallStart), ok, callId, and the decoded
         # output — not the old id-only ToolUseEnd placeholder.

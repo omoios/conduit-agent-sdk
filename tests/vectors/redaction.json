@@ -1,0 +1,51 @@
+{
+  "name": "redaction",
+  "description": "Agent message delta whose payload was already scrubbed (redactionStatus=redacted). Verifies the reducer passes through redacted payload text (\"[REDACTED]\") as finalOutput.",
+  "input": [
+    {
+      "id": "evt_1",
+      "type": "run.started",
+      "runId": "v_redaction",
+      "sequence": 1,
+      "timestamp": "T0",
+      "source": "sdk",
+      "redactionStatus": "none"
+    },
+    {
+      "id": "evt_2",
+      "type": "agent.message.delta",
+      "runId": "v_redaction",
+      "sequence": 2,
+      "timestamp": "T1",
+      "source": "agent",
+      "redactionStatus": "redacted",
+      "payload": {
+        "text": "[REDACTED]",
+        "channel": "final"
+      }
+    },
+    {
+      "id": "evt_3",
+      "type": "run.completed",
+      "runId": "v_redaction",
+      "sequence": 3,
+      "timestamp": "T2",
+      "source": "sdk",
+      "redactionStatus": "none",
+      "summary": "Done after redacted message"
+    }
+  ],
+  "expected": {
+    "runId": "v_redaction",
+    "status": "completed",
+    "finalOutput": "[REDACTED]",
+    "summary": "Done after redacted message",
+    "changedFiles": [],
+    "tests": [],
+    "approvals": [],
+    "artifacts": [],
+    "eventCount": 3,
+    "startedAt": "T0",
+    "endedAt": "T2"
+  }
+}

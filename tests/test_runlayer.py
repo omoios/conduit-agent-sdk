@@ -167,6 +167,46 @@ class TestMockRun:
         assert r1.run_id == r2.run_id
         assert r1.ended_at == r2.ended_at  # same cached timestamp
 
+    @pytest.mark.asyncio
+    async def test_mock_summary_carries_through(self) -> None:
+        """A dict item carrying `summary` propagates it to the emitted event (P1 fix)."""
+        agent = Agent(name="x")
+        adapter = mock_adapter([
+            {"type": "agent.message.delta", "payload": {"text": "Done"}},
+            {"type": "run.completed", "summary": "Done"},
+        ])
+        run = await Runner.start(agent, task="t", adapter=adapter)
+        events = [e async for e in run.events()]
+        completed = [e for e in events if e.type == "run.completed"]
+        assert completed and completed[0].summary == "Done"
+
+    @pytest.mark.asyncio
+    async def test_mock_three_tuple_carries_summary(self) -> None:
+        """A 3-tuple (type, payload, summary) is supported (P1)."""
+        agent = Agent(name="x")
+        adapter = mock_adapter([
+            ("run.completed", None, "all done"),
+        ])
+        run = await Runner.start(agent, task="t", adapter=adapter)
+        events = [e async for e in run.events()]
+        assert events[-1].type == "run.completed"
+        assert events[-1].summary == "all done"
+
+    @pytest.mark.asyncio
+    async def test_result_has_empty_evidence_defaults(self) -> None:
+        """Result constructs with the evidence fields defaulted (P1)."""
+        r = Result(run_id="r", status="completed", event_count=0)
+        assert r.changed_files == []
+        assert r.tests == []
+        assert r.approvals == []
+        assert r.artifacts == []
+        assert r.final_output is None
+        assert r.diff is None
+        assert r.pr is None
+        assert r.usage is None
+        # error remains the seed failure shape slot (None until a run.failed).
+        assert r.error is None
+
 
 # ---------------------------------------------------------------------------
 # Event schema validation
@@ -314,6 +354,86 @@ class TestFailure:
 
 
 # ---------------------------------------------------------------------------
+# Queue-driver: status, cancel, timeout
+# ---------------------------------------------------------------------------
+
+
+class TestQueueDriver:
+    """Run as a single-consumer queue driver (Phase 2)."""
+
+    @pytest.mark.asyncio
+    async def test_status_running_before_terminal(self) -> None:
+        adapter = mock_adapter([("agent.message.delta", {"text": "hi"})])
+        run = await Runner.start(Agent(name="x"), task="t", adapter=adapter)
+        # status() is available before draining; the run has not yet started.
+        assert run.status() == "running"
+        await run.result()
+        assert run.status() == "completed"
+
+    @pytest.mark.asyncio
+    async def test_cancel_yields_cancelled(self) -> None:
+        import asyncio
+
+        started = asyncio.Event()
+
+        class _SlowAdapter:
+            name = "slow"
+
+            async def run(self, task, *, run_id):
+                yield AgentEvent(id="i", type="run.started", run_id=run_id,
+                                 sequence=0, timestamp="t", source="sdk",
+                                 redaction_status="none")
+                started.set()
+                try:
+                    await asyncio.sleep(30)
+                except asyncio.CancelledError:
+                    return
+                yield AgentEvent(id="i2", type="run.completed", run_id=run_id,
+                                 sequence=0, timestamp="t", source="sdk",
+                                 redaction_status="none")
+
+        run = await Runner.start(Agent(name="x"), task="t", adapter=_SlowAdapter())
+        events: list[AgentEvent] = []
+
+        async def consume() -> None:
+            async for ev in run.events():
+                events.append(ev)
+
+        consumer = asyncio.create_task(consume())
+        await started.wait()
+        await run.cancel("user requested")
+        await consumer
+        from tests._adapter_contract import _assert_contract
+        _assert_contract(events)
+        assert run.status() == "cancelled"
+        result = await run.result()
+        assert result.status == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_timeout_produces_timed_out(self) -> None:
+        import asyncio
+
+        class _BlockingAdapter:
+            name = "block"
+
+            async def run(self, task, *, run_id):
+                yield AgentEvent(id="i", type="run.started", run_id=run_id,
+                                 sequence=0, timestamp="t", source="sdk",
+                                 redaction_status="none")
+                await asyncio.sleep(10)  # never completes within the budget
+                yield AgentEvent(id="i2", type="run.completed", run_id=run_id,
+                                 sequence=0, timestamp="t", source="sdk",
+                                 redaction_status="none")
+
+        run = await Runner.start(
+            Agent(name="x"), task="t", adapter=_BlockingAdapter(), timeout=0.2,
+        )
+        result = await run.result()
+        assert result.status == "timed_out"
+        assert result.event_count == 3  # started + cancelling + timed_out
+
+
+# ---------------------------------------------------------------------------
 # ACP normalization (no live agent)
 # ---------------------------------------------------------------------------
 
@@ -347,9 +467,11 @@ class TestAcpNormalization:
             _StubUpdate(UpdateKind.TextDelta, text="Hello"),
         ])
         assert any(
-            e.type == "agent.message.delta" and e.payload == {"text": "Hello"}
+            e.type == "agent.message.delta"
+            and e.payload.get("text") == "Hello"
+            and e.payload.get("channel") == "final"
             for e in events
-        ), "TextDelta → agent.message.delta missing"
+        ), "TextDelta → agent.message.delta (channel=final) missing"
 
     def test_thought_delta_maps_to_agent_thought_summary(self) -> None:
         events = self._collect([
@@ -494,12 +616,141 @@ class TestAcpNormalization:
 
     # -- Unknown update kinds are forwarded as agent.update -----------------
 
-    def test_unknown_kind_forwarded_as_agent_update(self) -> None:
-        """Unrecognised UpdateKind values map to agent.update."""
+    def test_rate_limit_maps_to_rate_limited(self) -> None:
+        """RateLimit now maps to its own named event (no longer agent.update)."""
         events = self._collect([
             _StubUpdate(UpdateKind.RateLimit,
                         rate_limit_json='{"limit": 10, "remaining": 3}'),
         ])
-        updates = [e for e in events if e.type == "agent.update"]
-        assert len(updates) >= 1, "Unmapped kind must emit agent.update"
-        # RateLimit is in _GENERIC set, so it maps to agent.update
+        limited = [e for e in events if e.type == "rate.limited"]
+        assert len(limited) >= 1, "RateLimit → rate.limited missing"
+
+
+class TestThoughtModes:
+    """include_thoughts controls the reasoning stream shape (delta / summary / off)."""
+
+    @staticmethod
+    def _collect(updates, *, include_thoughts):
+        client = _StubClient(updates)
+        events: list[AgentEvent] = []
+
+        async def _run() -> None:
+            adapter = acp_adapter(client, include_thoughts=include_thoughts)
+            async for ev in adapter.run("t", run_id="r"):
+                events.append(ev)
+
+        import asyncio
+        asyncio.run(_run())
+        return events
+
+    def test_summary_coalesces_chunks_into_one_summary(self) -> None:
+        # Multiple ThoughtDeltas, then a TextDelta boundary, then Done.
+        events = self._collect([
+            _StubUpdate(UpdateKind.ThoughtDelta, text="Plan A. "),
+            _StubUpdate(UpdateKind.ThoughtDelta, text="Then B."),
+            _StubUpdate(UpdateKind.TextDelta, text="ok"),
+            _StubUpdate(UpdateKind.Done),
+        ], include_thoughts="summary")
+        summaries = [e for e in events if e.type == "agent.thought_summary"]
+        deltas = [e for e in events if e.type == "agent.thought.delta"]
+        assert len(summaries) == 1, f"expected 1 coalesced summary, got {len(summaries)}"
+        assert summaries[0].payload["text"] == "Plan A. Then B."
+        assert deltas == [], "summary mode must not emit thought.delta"
+
+    def test_delta_emits_one_per_chunk(self) -> None:
+        events = self._collect([
+            _StubUpdate(UpdateKind.ThoughtDelta, text="a"),
+            _StubUpdate(UpdateKind.ThoughtDelta, text="b"),
+            _StubUpdate(UpdateKind.Done),
+        ], include_thoughts="delta")
+        deltas = [e for e in events if e.type == "agent.thought.delta"]
+        assert [e.payload["text"] for e in deltas] == ["a", "b"]
+        assert not any(e.type == "agent.thought_summary" for e in events)
+
+    def test_false_drops_all_thought_events(self) -> None:
+        events = self._collect([
+            _StubUpdate(UpdateKind.ThoughtDelta, text="hidden"),
+            _StubUpdate(UpdateKind.Done),
+        ], include_thoughts=False)
+        assert not any(e.type.startswith("agent.thought") for e in events)
+        # Lifecycle still intact.
+        assert events[0].type == "run.started"
+        assert events[-1].type == "run.completed"
+
+
+class TestSemanticToolMapping:
+    """Rich tool mapping: ToolCallStart.kind → semantic events (Slice 1)."""
+
+    @staticmethod
+    def _collect(updates):
+        client = _StubClient(updates)
+        events: list[AgentEvent] = []
+
+        async def _run() -> None:
+            async for ev in acp_adapter(client).run("t", run_id="r"):
+                events.append(ev)
+
+        import asyncio
+        asyncio.run(_run())
+        return events
+
+    def test_edit_tool_emits_file_events(self) -> None:
+        events = self._collect([
+            _StubUpdate(UpdateKind.ToolUseStart, tool_use_id="t1",
+                        tool_name="edit_file", tool_kind="edit",
+                        tool_input='{"path": "src/app.py"}'),
+            _StubUpdate(UpdateKind.ToolUseUpdate, tool_use_id="t1",
+                        tool_status="completed",
+                        tool_locations='["src/app.py"]'),
+            _StubUpdate(UpdateKind.Done),
+        ])
+        types = [e.type for e in events]
+        assert "file.write_requested" in types, "edit start → file.write_requested"
+        assert "file.edited" in types, "edit complete → file.edited (from locations)"
+        edited = [e for e in events if e.type == "file.edited"]
+        assert edited[0].payload["path"] == "src/app.py"
+        # Universal lifecycle completion still emitted.
+        assert "tool.completed" in types
+
+    def test_execute_tool_emits_command_started(self) -> None:
+        events = self._collect([
+            _StubUpdate(UpdateKind.ToolUseStart, tool_use_id="t2",
+                        tool_name="shell", tool_kind="execute",
+                        tool_input='{"command": "pytest"}'),
+            _StubUpdate(UpdateKind.Done),
+        ])
+        types = [e.type for e in events]
+        assert "command.started" in types
+        assert "tool.started" not in types, "execute must not also emit generic tool.started"
+
+    def test_read_tool_emits_file_read(self) -> None:
+        events = self._collect([
+            _StubUpdate(UpdateKind.ToolUseStart, tool_use_id="t3",
+                        tool_name="read_file", tool_kind="read",
+                        tool_input='{"path": "README.md"}'),
+            _StubUpdate(UpdateKind.Done),
+        ])
+        assert any(e.type == "file.read" for e in events)
+        assert not any(e.type == "tool.started" for e in events)
+
+    def test_plan_created_then_updated(self) -> None:
+        events = self._collect([
+            _StubUpdate(UpdateKind.Plan, plan_json='[{"label":"a"}]'),
+            _StubUpdate(UpdateKind.Plan, plan_json='[{"label":"a"},{"label":"b"}]'),
+            _StubUpdate(UpdateKind.Done),
+        ])
+        plans = [e.type for e in events if e.type.startswith("agent.plan.")]
+        assert plans == ["agent.plan.created", "agent.plan.updated"], plans
+
+    def test_done_refusal_maps_to_run_failed(self) -> None:
+        events = self._collect([
+            _StubUpdate(UpdateKind.Done, stop_reason="refusal"),
+        ])
+        failed = [e for e in events if e.type == "run.failed"]
+        assert failed and failed[0].payload["code"] == "refusal"
+
+    def test_done_cancelled_maps_to_run_cancelled(self) -> None:
+        events = self._collect([
+            _StubUpdate(UpdateKind.Done, stop_reason="cancelled"),
+        ])
+        assert any(e.type == "run.cancelled" for e in events)

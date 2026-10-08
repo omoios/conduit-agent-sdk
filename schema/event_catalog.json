@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://conduit-agent-sdk/schema/event_catalog.json",
+  "title": "EventCatalog",
+  "description": "Authoritative catalog of Background Agent SDK event `type` strings (per docs/seed/.../EVENTS.md and SOURCE.md §9). The envelope schema (agent_event.schema.json) permits any dotted lowercase name plus x.* experimental names; this list is the stable, known set used for documentation and cross-language conformance. Rust/TS ports MUST recognize every entry here.",
+  "note": "Not a JSON Schema for validation — a reference list. Names not in this list are still wire-valid if they match the envelope `type` pattern; they are 'experimental' until promoted.",
+  "events": {
+    "run.lifecycle": [
+      "run.created", "run.queued", "run.allocating", "run.booting",
+      "run.bootstrapping", "run.started", "run.status_changed",
+      "run.heartbeat", "run.awaiting_approval", "run.cancelling",
+      "run.cancelled", "run.timed_out", "run.completed", "run.failed",
+      "run.cleanup_started", "run.destroyed"
+    ],
+    "agent.output": [
+      "agent.message.delta", "agent.message.completed",
+      "agent.plan.created", "agent.plan.updated",
+      "agent.subtask.started", "agent.subtask.completed",
+      "agent.thought.delta", "agent.thought_summary"
+    ],
+    "tools": ["tool.started", "tool.completed", "tool.failed", "tool.result_modified", "search.query", "fetch.requested"],
+    "commands": ["command.started", "command.output", "command.completed", "command.failed"],
+    "files.and.diffs": [
+      "file.read", "file.write_requested", "file.edited",
+      "diff.preview_created", "diff.updated", "diff.applied", "diff.discarded"
+    ],
+    "approvals": [
+      "approval.required", "approval.approved", "approval.rejected",
+      "approval.expired", "approval.bypass_denied"
+    ],
+    "tests.and.evals": ["test.started", "test.output", "test.completed", "eval.started", "eval.completed"],
+    "agent.capability": ["agent.commands.available", "agent.mode.changed", "agent.config.updated", "session.info", "rate.limited"],
+    "elicitation": [
+      "elicitation.requested", "elicitation.responded",
+      "elicitation.cancelled", "elicitation.expired"
+    ],
+    "git.and.prs": ["git.branch_created", "git.commit_created", "pr.opened", "pr.updated"],
+    "environment": [
+      "environment.detect.started", "environment.repo.inspected",
+      "environment.stack_detected", "environment.plan_proposed",
+      "environment.validation_started", "environment.validation_failed",
+      "environment.validation_passed", "environment.profile_saved",
+      "environment.profile_stale"
+    ],
+    "security.policy.budget": [
+      "secret.missing", "secret.redacted", "policy.violation", "policy.blocked",
+      "budget.updated", "budget.exceeded"
+    ],
+    "artifacts.and.tracing": ["artifact.created", "trace.linked", "cost.updated"]
+  },
+  "experimental_prefix": "x.",
+  "terminal_types": ["run.completed", "run.failed", "run.cancelled", "run.timed_out"],
+  "statuses": ["completed", "failed", "cancelled", "timed_out"]
+}

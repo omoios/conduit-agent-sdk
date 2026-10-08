@@ -1,0 +1,87 @@
+{
+  "name": "evidence",
+  "description": "Standard run that edits a file, runs a test, and produces a final message. Verifies reducer evidence accumulation: changedFiles, tests, and finalOutput are all populated from respective events.",
+  "input": [
+    {
+      "id": "evt_1",
+      "type": "run.started",
+      "runId": "v_evidence",
+      "sequence": 1,
+      "timestamp": "T0",
+      "source": "sdk",
+      "redactionStatus": "none"
+    },
+    {
+      "id": "evt_2",
+      "type": "file.edited",
+      "runId": "v_evidence",
+      "sequence": 2,
+      "timestamp": "T1",
+      "source": "agent",
+      "redactionStatus": "none",
+      "payload": {
+        "path": "calc.py"
+      }
+    },
+    {
+      "id": "evt_3",
+      "type": "test.completed",
+      "runId": "v_evidence",
+      "sequence": 3,
+      "timestamp": "T2",
+      "source": "agent",
+      "redactionStatus": "none",
+      "payload": {
+        "command": "pytest",
+        "exitCode": 0,
+        "passed": true,
+        "durationMs": 120,
+        "output": "all ok"
+      }
+    },
+    {
+      "id": "evt_4",
+      "type": "agent.message.delta",
+      "runId": "v_evidence",
+      "sequence": 4,
+      "timestamp": "T3",
+      "source": "agent",
+      "redactionStatus": "none",
+      "payload": {
+        "text": "All tests pass",
+        "channel": "final"
+      }
+    },
+    {
+      "id": "evt_5",
+      "type": "run.completed",
+      "runId": "v_evidence",
+      "sequence": 5,
+      "timestamp": "T4",
+      "source": "sdk",
+      "redactionStatus": "none",
+      "summary": "Done"
+    }
+  ],
+  "expected": {
+    "runId": "v_evidence",
+    "status": "completed",
+    "finalOutput": "All tests pass",
+    "summary": "Done",
+    "changedFiles": ["calc.py"],
+    "tests": [
+      {
+        "command": "pytest",
+        "exitCode": 0,
+        "passed": true,
+        "durationMs": 120,
+        "output": "all ok"
+      }
+    ],
+    "approvals": [],
+    "artifacts": [],
+    "eventCount": 5,
+    "startedAt": "T0",
+    "endedAt": "T4"
+  }
+}

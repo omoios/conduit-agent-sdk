@@ -152,6 +152,8 @@ from conduit_sdk.runlayer import (
     Runner,
     acp_adapter,
     mock_adapter,
+    process_adapter,
+    conductor_adapter,
 )
 from conduit_sdk.types import (
     Agent,
@@ -241,6 +243,8 @@ __all__ = [
     "Adapter",
     "mock_adapter",
     "acp_adapter",
+    "process_adapter",
+    "conductor_adapter",
     # Proxy
     "Proxy",
     "ProxyChain",

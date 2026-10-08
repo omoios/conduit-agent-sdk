@@ -1,0 +1,33 @@
+{
+  "name": "timeout",
+  "description": "Deadline exceeded during a run. The reducer checks now >= state.deadline and emits run.cancelling + run.timed_out. Expected: status timed_out, summary \"Run timed out\".",
+  "policy": {
+    "kind": "max_runtime_minutes",
+    "minutes": 1
+  },
+  "deadline": 50.0,
+  "input": [
+    {
+      "id": "evt_1",
+      "type": "run.started",
+      "runId": "v_timeout",
+      "sequence": 1,
+      "timestamp": "T0",
+      "source": "sdk",
+      "redactionStatus": "none"
+    }
+  ],
+  "expected": {
+    "runId": "v_timeout",
+    "status": "timed_out",
+    "finalOutput": "Run timed out",
+    "summary": "Run timed out",
+    "changedFiles": [],
+    "tests": [],
+    "approvals": [],
+    "artifacts": [],
+    "eventCount": 3,
+    "startedAt": "T0",
+    "endedAt": "T0"
+  }
+}

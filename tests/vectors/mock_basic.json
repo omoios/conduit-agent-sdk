@@ -1,0 +1,48 @@
+{
+  "name": "mock_basic",
+  "description": "Smallest mock run: run.started -> agent.message.delta('Done') -> run.completed. Input events are wire (camelCase) records; `expected` is the seed-complete wire Result the reducer will produce. Sparse convention: None-valued optional fields are omitted. Used by tests/test_wire_contract.py (schema-valid + round-trip) now and by tests/test_conformance.py (reducer-driven) in Phase 12.",
+  "input": [
+    {
+      "id": "evt_1",
+      "type": "run.started",
+      "runId": "mock_basic",
+      "sequence": 1,
+      "timestamp": "2026-01-01T00:00:00+00:00",
+      "source": "sdk",
+      "redactionStatus": "none"
+    },
+    {
+      "id": "evt_2",
+      "type": "agent.message.delta",
+      "runId": "mock_basic",
+      "sequence": 2,
+      "timestamp": "2026-01-01T00:00:01+00:00",
+      "source": "agent",
+      "redactionStatus": "none",
+      "payload": {"text": "Done", "channel": "final"}
+    },
+    {
+      "id": "evt_3",
+      "type": "run.completed",
+      "runId": "mock_basic",
+      "sequence": 3,
+      "timestamp": "2026-01-01T00:00:02+00:00",
+      "source": "sdk",
+      "redactionStatus": "none",
+      "summary": "Done"
+    }
+  ],
+  "expected": {
+    "runId": "mock_basic",
+    "status": "completed",
+    "finalOutput": "Done",
+    "summary": "Done",
+    "changedFiles": [],
+    "tests": [],
+    "approvals": [],
+    "artifacts": [],
+    "eventCount": 3,
+    "startedAt": "2026-01-01T00:00:00+00:00",
+    "endedAt": "2026-01-01T00:00:02+00:00"
+  }
+}

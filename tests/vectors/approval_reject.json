@@ -1,0 +1,59 @@
+{
+  "name": "approval_reject",
+  "description": "Command requiring approval is rejected by the user. The reducer gates command.started, emits approval.required, and the test feeds a synthetic approval.rejected. Expected: approvals has a rejected entry; changedFiles is empty.",
+  "policy": {
+    "kind": "require_approval_for",
+    "commands": ["*"]
+  },
+  "input": [
+    {
+      "id": "evt_1",
+      "type": "run.started",
+      "runId": "v_approval_reject",
+      "sequence": 1,
+      "timestamp": "T0",
+      "source": "sdk",
+      "redactionStatus": "none"
+    },
+    {
+      "id": "evt_2",
+      "type": "command.started",
+      "runId": "v_approval_reject",
+      "sequence": 2,
+      "timestamp": "T1",
+      "source": "agent",
+      "redactionStatus": "none",
+      "payload": {
+        "command": "rm -rf /tmp/data"
+      }
+    },
+    {
+      "id": "evt_5",
+      "type": "run.completed",
+      "runId": "v_approval_reject",
+      "sequence": 5,
+      "timestamp": "T3",
+      "source": "sdk",
+      "redactionStatus": "none",
+      "summary": "Done after rejection"
+    }
+  ],
+  "expected": {
+    "runId": "v_approval_reject",
+    "status": "completed",
+    "finalOutput": "Done after rejection",
+    "summary": "Done after rejection",
+    "changedFiles": [],
+    "tests": [],
+    "approvals": [
+      {
+        "id": "id_1",
+        "decision": "rejected"
+      }
+    ],
+    "artifacts": [],
+    "eventCount": 5,
+    "startedAt": "T0",
+    "endedAt": "T3"
+  }
+}

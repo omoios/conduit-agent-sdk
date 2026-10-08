@@ -312,3 +312,84 @@ class TestRedactEvents:
         assert ev.sequence == 99
         assert ev.timestamp == "2026-06-17T12:00:00Z"
         assert ev.source == "agent"
+
+
+# ---------------------------------------------------------------------------
+# Sync redact_event (Phase 5) + Run integration
+# ---------------------------------------------------------------------------
+
+
+from conduit_sdk import Runner  # noqa: E402
+from conduit_sdk.runlayer import Agent, mock_adapter  # noqa: E402
+from conduit_sdk.runcore import redact_event  # noqa: E402
+from tests._adapter_contract import _assert_contract  # noqa: E402
+
+
+class TestRedactEventSync:
+    """runcore.redact_event — sync scrub of a single event."""
+
+    def test_scrubs_secret_in_payload(self) -> None:
+        f = redact_patterns(r"sk-[A-Za-z0-9]+")
+        ev = AgentEvent(id="e", type="agent.message", run_id="r", sequence=1,
+                        timestamp="t", source="sdk", redaction_status="none",
+                        payload={"token": "sk-secret123"})
+        out = redact_event(ev, f)
+        assert out.redaction_status == "redacted"
+        assert out.payload["token"] == "[REDACTED]"
+        assert ev.payload["token"] == "sk-secret123"  # input not mutated
+
+    def test_no_change_preserves_status_and_identity(self) -> None:
+        f = redact_patterns(r"sk-[A-Za-z0-9]+")
+        ev = AgentEvent(id="e", type="agent.message", run_id="r", sequence=1,
+                        timestamp="t", source="sdk", redaction_status="none",
+                        payload={"text": "clean"})
+        out = redact_event(ev, f)
+        assert out.redaction_status == "none"  # unchanged
+        assert out is ev  # no copy when nothing changed
+
+    def test_scrubs_summary_too(self) -> None:
+        f = redact_patterns(r"sk-[A-Za-z0-9]+")
+        ev = AgentEvent(id="e", type="agent.message", run_id="r", sequence=1,
+                        timestamp="t", source="sdk", redaction_status="none",
+                        payload={"x": 1}, summary="key=sk-leaked")
+        out = redact_event(ev, f)
+        assert out.redaction_status == "redacted"
+        assert "sk-leaked" not in (out.summary or "")
+
+
+@pytest.mark.asyncio
+class TestRunWithRedaction:
+    """Run(redaction=...) scrubs every adapter event before it reaches the reducer."""
+
+    async def test_run_redacts_all_events(self) -> None:
+        f = redact_patterns(r"sk-[A-Za-z0-9]+")
+        run = await Runner.start(
+            Agent(name="x"), task="t",
+            adapter=mock_adapter([
+                ("agent.message.delta", {"text": "here is sk-topsecret data"}),
+            ]),
+            redaction=f,
+        )
+        events = [e async for e in run.events()]
+        # No event carries the secret.
+        for e in events:
+            blob = repr(e.payload) + repr(e.summary)
+            assert "sk-topsecret" not in blob, blob
+        # The message event was scrubbed.
+        msg = [e for e in events if e.type == "agent.message.delta"][0]
+        assert msg.redaction_status == "redacted"
+        _assert_contract(events)
+
+    async def test_fully_redacted_payload(self) -> None:
+        f = redact_patterns(r"sk-[A-Za-z0-9]+")
+        run = await Runner.start(
+            Agent(name="x"), task="t",
+            adapter=mock_adapter([
+                ("agent.message.delta", {"text": "sk-aaaa sk-bbbb"}),
+            ]),
+            redaction=f,
+        )
+        events = [e async for e in run.events()]
+        msg = [e for e in events if e.type == "agent.message.delta"][0]
+        assert msg.payload["text"] == "[REDACTED] [REDACTED]"
+        _assert_contract(events)

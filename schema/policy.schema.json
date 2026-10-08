@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://conduit-agent-sdk/schema/policy.schema.json",
+  "title": "PolicyDecision",
+  "description": "Canonical wire shape for a Policy.evaluate(action) decision (per A3/A6). The Action it decides over, and the ApprovalRequest/ApprovalDecision it may produce, share the same camelCase form. Python dataclasses live in policy.py (added in Phase 3); these schemas are the SSOT consumed by conformance vectors in Stages 2-3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["effect"],
+  "properties": {
+    "effect": {
+      "type": "string",
+      "enum": ["allow", "deny", "require_approval"]
+    },
+    "risk": {
+      "type": "string",
+      "enum": ["low", "med", "high"]
+    },
+    "reason": {
+      "description": "Human-readable rationale (nullable)."
+    },
+    "kind": {
+      "description": "Action kind this decision applies to (nullable): command, file_write, diff_apply, tool, or an unknown kind."
+    },
+    "approvalId": {
+      "description": "Present only when effect=require_approval: id of the surfaced ApprovalRequest."
+    }
+  }
+}

@@ -1,238 +1,143 @@
-"""Tests for conduit_sdk.elicitation and the agent/client elicitation paths.
+"""Tests for first-class elicitation (Slice 2).
 
-Elicitation is an UNSTABLE ACP feature: an agent sends ``elicitation/create``
-to request structured user input from the client. These tests cover the
-Python types, the Rust-bridge adapter, the agent-side request/response
-correlation in ``AgentServer``, and a full end-to-end loopback where the
-Rust-backed ``Client`` routes an elicitation request to a Python handler.
+Elicitation is a standalone agent→client request (NOT reducer-gated), surfaced
+as elicitation.* events and resolved via on_elicitation, external
+respond()/cancel_elicitation(), or timeout. Recorded into Result.questions.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
-import sys
-from pathlib import Path
 
 import pytest
 
-from conduit_sdk import (
-    AgentServer,
-    Client,
-    ElicitationRequest,
-    ElicitationResponse,
-    auto_accept,
-    auto_decline,
-)
-from conduit_sdk.agent import AgentContext
-from conduit_sdk.elicitation import _make_elicitation_bridge
-
-_APP = str(Path(__file__).parent / "_elicit_agent_app.py")
+from conduit_sdk.elicitation import ElicitationRequest, ElicitationResponse
+from conduit_sdk.runlayer import Agent, AgentEvent, Runner
 
 
-async def _noop_write(_msg: dict) -> None:  # minimal stand-in transport
-    return None
+class _IdleAdapter:
+    name = "idle"
+
+    async def run(self, task, *, run_id):
+        yield AgentEvent(id="i", type="run.started", run_id=run_id, sequence=0,
+                         timestamp="t", source="sdk", redaction_status="none")
+        await asyncio.Event().wait()
 
 
-# --- type validation ---------------------------------------------------------
+async def _drain(run) -> None:
+    async for _ in run.events():
+        pass
 
 
-def test_response_accept_keeps_content():
-    r = ElicitationResponse(action="accept", content={"x": 1})
-    assert r.action == "accept"
-    assert r.content == {"x": 1}
+class TestElicitation:
+    @pytest.mark.asyncio
+    async def test_on_elicitation_responds(self) -> None:
+        seen: list[ElicitationRequest] = []
 
+        def on_elicitation(req: ElicitationRequest) -> ElicitationResponse:
+            seen.append(req)
+            return ElicitationResponse(action="accept", content={"name": "Alice"})
 
-def test_response_decline_drops_content():
-    r = ElicitationResponse(action="decline", content={"x": 1})
-    assert r.content is None
+        run = await Runner.start(Agent(name="x"), task="t", adapter=_IdleAdapter(),
+                                 on_elicitation=on_elicitation)
+        consumer = asyncio.create_task(_drain(run))
+        await asyncio.sleep(0)
+        req = ElicitationRequest(message="What is your name?", mode="form")
+        resp = await run._resolve_elicitation(req)
+        assert resp.action == "accept"
+        assert resp.content == {"name": "Alice"}
+        assert seen
+        types = [e.type for e in run._buffer]
+        assert "elicitation.requested" in types and "elicitation.responded" in types
+        consumer.cancel()
+        try:
+            await consumer
+        except asyncio.CancelledError:
+            pass
 
+    @pytest.mark.asyncio
+    async def test_external_respond(self) -> None:
+        run = await Runner.start(Agent(name="x"), task="t", adapter=_IdleAdapter())
+        consumer = asyncio.create_task(_drain(run))
+        await asyncio.sleep(0)
 
-def test_response_cancel_drops_content():
-    r = ElicitationResponse(action="cancel", content={"x": 1})
-    assert r.content is None
+        async def ask():
+            return await run._resolve_elicitation(ElicitationRequest(message="q"))
 
+        task = asyncio.create_task(ask())
+        # Wait for the elicitation to become pending, then answer externally.
+        for _ in range(200):
+            if run._pending_elicitations:
+                eid = next(iter(run._pending_elicitations))
+                await run.respond(eid, {"answer": 42})
+                break
+            await asyncio.sleep(0.005)
+        else:
+            raise AssertionError("no pending elicitation")
+        resp = await asyncio.wait_for(task, timeout=5)
+        assert resp.action == "accept"
+        assert resp.content == {"answer": 42}
+        consumer.cancel()
+        try:
+            await consumer
+        except asyncio.CancelledError:
+            pass
 
-def test_response_invalid_action_raises():
-    with pytest.raises(ValueError):
-        ElicitationResponse(action="bogus")
+    @pytest.mark.asyncio
+    async def test_external_cancel(self) -> None:
+        run = await Runner.start(Agent(name="x"), task="t", adapter=_IdleAdapter())
+        consumer = asyncio.create_task(_drain(run))
+        await asyncio.sleep(0)
 
+        async def ask():
+            return await run._resolve_elicitation(ElicitationRequest(message="q"))
 
-# --- built-in handlers -------------------------------------------------------
+        task = asyncio.create_task(ask())
+        for _ in range(200):
+            if run._pending_elicitations:
+                eid = next(iter(run._pending_elicitations))
+                await run.cancel_elicitation(eid)
+                break
+            await asyncio.sleep(0.005)
+        resp = await asyncio.wait_for(task, timeout=5)
+        assert resp.action == "cancel"
+        types = [e.type for e in run._buffer]
+        assert "elicitation.cancelled" in types
+        consumer.cancel()
+        try:
+            await consumer
+        except asyncio.CancelledError:
+            pass
 
+    @pytest.mark.asyncio
+    async def test_elicitation_timeout_expires(self) -> None:
+        run = await Runner.start(Agent(name="x"), task="t", adapter=_IdleAdapter(),
+                                 elicitation_timeout_s=0.05)
+        consumer = asyncio.create_task(_drain(run))
+        await asyncio.sleep(0)
+        resp = await asyncio.wait_for(
+            run._resolve_elicitation(ElicitationRequest(message="q")), timeout=5)
+        assert resp.action == "cancel"
+        assert "elicitation.expired" in [e.type for e in run._buffer]
+        consumer.cancel()
+        try:
+            await consumer
+        except asyncio.CancelledError:
+            pass
 
-@pytest.mark.asyncio
-async def test_auto_handlers():
-    req = ElicitationRequest(message="hi")
-    assert (await auto_accept(req)).action == "accept"
-    assert (await auto_decline(req)).action == "decline"
+    @pytest.mark.asyncio
+    async def test_questions_recorded_in_result(self) -> None:
+        def on_elicitation(req):
+            return ElicitationResponse(action="accept", content={"x": 1})
 
-
-# --- bridge adapter ----------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_bridge_round_trip():
-    async def handler(req: ElicitationRequest) -> ElicitationResponse:
-        assert req.mode == "form"
-        assert req.message == "What is your name?"
-        return ElicitationResponse(action="accept", content={"name": "ada"})
-
-    bridge = _make_elicitation_bridge(handler)
-    payload = json.dumps(
-        {
-            "mode": "form",
-            "message": "What is your name?",
-            "sessionId": "s1",
-            "requestedSchema": {"type": "object"},
-        }
-    )
-    out = json.loads(await bridge(payload))
-    assert out == {"action": "accept", "content": {"name": "ada"}}
-
-
-@pytest.mark.asyncio
-async def test_bridge_accepts_dict_return():
-    async def handler(req):
-        return {"action": "decline"}
-
-    bridge = _make_elicitation_bridge(handler)
-    out = json.loads(await bridge(json.dumps({"message": "x"})))
-    assert out["action"] == "decline"
-    assert out["content"] is None
-
-
-# --- AgentContext.request_elicitation ----------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_ctx_form_params_built_correctly():
-    captured: dict = {}
-
-    async def sender(method, params):
-        captured["method"] = method
-        captured["params"] = params
-        return {"action": "accept", "content": {"name": "ada"}}
-
-    ctx = AgentContext("s1", _noop_write, [], sender)
-    result = await ctx.request_elicitation(
-        "name?",
-        requested_schema={
-            "type": "object",
-            "properties": {"name": {"type": "string"}},
-            "required": ["name"],
-        },
-    )
-    assert captured["method"] == "elicitation/create"
-    assert captured["params"]["mode"] == "form"
-    assert captured["params"]["sessionId"] == "s1"
-    assert captured["params"]["requestedSchema"]["required"] == ["name"]
-    assert result["content"] == {"name": "ada"}
-
-
-@pytest.mark.asyncio
-async def test_ctx_form_requires_schema():
-    async def sender(method, params):
-        return {"action": "cancel"}
-
-    ctx = AgentContext("s1", _noop_write, [], sender)
-    with pytest.raises(ValueError):
-        await ctx.request_elicitation("name?", mode="form")
-
-
-@pytest.mark.asyncio
-async def test_ctx_url_mode_requires_url_and_id():
-    ctx = AgentContext("s1", _noop_write, [], None)
-    with pytest.raises(RuntimeError):
-        await ctx.request_elicitation("connect", mode="url")
-
-
-@pytest.mark.asyncio
-async def test_ctx_url_mode_builds_params():
-    captured: dict = {}
-
-    async def sender(method, params):
-        captured["params"] = params
-        return {"action": "cancel"}
-
-    ctx = AgentContext("s1", _noop_write, [], sender)
-    await ctx.request_elicitation(
-        "sign in", mode="url", url="https://example.org", elicitation_id="e1"
-    )
-    assert captured["params"]["mode"] == "url"
-    assert captured["params"]["url"] == "https://example.org"
-    assert captured["params"]["elicitationId"] == "e1"
-
-
-# --- AgentServer request/response correlation --------------------------------
-
-
-@pytest.mark.asyncio
-async def test_send_request_resolves_on_response():
-    server = AgentServer()
-    sent: list[dict] = []
-
-    async def write(msg):
-        sent.append(msg)
-
-    task = asyncio.create_task(
-        server._send_request("elicitation/create", {"message": "hi"}, write)
-    )
-    await asyncio.sleep(0.01)  # let the request be written + future registered
-    assert sent and sent[0]["method"] == "elicitation/create"
-    req_id = sent[0]["id"]
-
-    # Simulate the client response arriving on the read loop.
-    server._pending_requests[req_id].set_result({"action": "decline"})
-    result = await task
-    assert result == {"action": "decline"}
-
-
-@pytest.mark.asyncio
-async def test_send_request_propagates_error_response():
-    server = AgentServer()
-    sent: list[dict] = []
-
-    async def write(msg):
-        sent.append(msg)
-
-    task = asyncio.create_task(
-        server._send_request("elicitation/create", {"message": "hi"}, write)
-    )
-    await asyncio.sleep(0.01)
-    req_id = sent[0]["id"]
-    server._pending_requests[req_id].set_exception(RuntimeError("boom"))
-    with pytest.raises(RuntimeError, match="boom"):
-        await task
-
-
-# --- end-to-end: Client elicitation_handler <-> AgentServer ------------------
-
-
-@pytest.mark.asyncio
-async def test_client_elicitation_loopback():
-    """Full path: the agent sends ``elicitation/create``; the Rust-backed
-    Client advertises the capability, routes the request to a Python
-    ``elicitation_handler``, and returns the response so the agent can
-    continue."""
-    from conduit_sdk import AgentOptions
-
-    async def handler(req: ElicitationRequest) -> ElicitationResponse:
-        assert req.mode == "form"
-        assert "name" in (req.requested_schema or {}).get("properties", {})
-        return ElicitationResponse(action="accept", content={"name": "grace"})
-
-    options = AgentOptions(elicitation_handler=handler)
-    client = Client([sys.executable, _APP], timeout=20, options=options)
-    try:
-        caps = await client.connect()
-        assert caps is not None  # initialize handshake completed
-
-        collected: list[str] = []
-        async for message in client.prompt("anything"):
-            collected.append(message.text())
-
-        full = "".join(s for s in collected if s)
-        assert "hello grace" in full, repr(collected)
-    finally:
-        await client.disconnect()
+        run = await Runner.start(Agent(name="x"), task="t", adapter=_IdleAdapter(),
+                                 on_elicitation=on_elicitation)
+        consumer = asyncio.create_task(_drain(run))
+        await asyncio.sleep(0)
+        await run._resolve_elicitation(ElicitationRequest(message="how many?"))
+        await run.cancel()
+        await consumer
+        result = await run.result()
+        assert result.questions
+        assert result.questions[0]["action"] in ("accept", "responded")
+        assert result.questions[0]["content"] == {"x": 1}
